@@ -1,0 +1,48 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+
+
+133 ---
+      "name": "Tinux Kernel: Build & Debug in QEMU (GDB)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/zig-out/bin/tinux",
+      "cwd": "${workspaceFolder}",
+      "MIMode": "gdb",
+      "miDebuggerPath": "gdb",
+      "miDebuggerServerAddress": "localhost:1234",
+      "preLaunchTask": "tinux: start qemu gdb server",
+      "postDebugTask": "tinux: stop qemu gdb server",
+      "stopAtEntry": false,
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Set target architecture to x86_64",
+          "text": "set architecture i386:x86-64",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Place hardware breakpoint at kmain",
+          "text": "hbreak kmain",
+          "ignoreFailures": false
+        },
+        {
+          "description": "Place hardware breakpoint at syscallDispatch",
+          "text": "hbreak syscallDispatch",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Place hardware breakpoint at isrDispatch",
+          "text": "hbreak isrDispatch",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  ]
+}

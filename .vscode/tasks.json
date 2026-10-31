@@ -1,0 +1,49 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "tinux: build kernel",
+      "type": "shell",
+      "command": "zig",
+      "args": ["build"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "tinux: start qemu gdb server",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/debug_gdb.sh",
+      "args": ["--server-only"],
+      "isBackground": true,
+      "dependsOn": ["tinux: build kernel"],
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Building Tinux kernel",
+          "endsPattern": "Starting QEMU GDB server"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "tinux: stop qemu gdb server",
+      "type": "shell",
+      "command": "pkill",
+      "args": ["-f", "qemu-system-x86_64.*tcp::1234"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "never"
+      }
+    }
+  ]
+}

@@ -1,4 +1,44 @@
+# ==============================================================================
+# Tinux Kernel - Clean-Room Repository .gitignore
+# Prevents GPL binary contamination, build artifacts, and disk images
+# ==============================================================================
+
+# Zig build artifacts & package caches
 .zig-cache/
+zig-cache/
 zig-out/
 zig-pkg/
+
+# Generated userland binaries, archives & initramfs
+.cache/
+*.cpio
+src/fs/initramfs.cpio
+*.elf
+*.bin
+*.exe
 *.o
+*.a
+*.so
+*.dylib
+*.iso
+*.tar
+*.tar.gz
+*.tgz
+
+# Third-party pre-compiled GPL / non-permissive binaries
+busybox
+busybox*
+coreutils*
+
+# QEMU runtime logs, disk images & temporary files
+/tmp/tinux_*
+*.img
+*.qcow2
+*.log
+
+# Diagnostic & transient escalation reports
+ESCALATION_REPORT.md
+
+# Operating System & Editor metadata
+.DS_Store
+Thumbs.db
