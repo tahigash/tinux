@@ -433,15 +433,45 @@ pub fn sysSetTidAddress(tidptr: usize) usize {
 }
 
 fn sysMount(source_ptr: usize, target_ptr: usize, fstype_ptr: usize, flags: usize, data_ptr: usize) isize {
-    _ = source_ptr;
-    _ = fstype_ptr;
     _ = flags;
     _ = data_ptr;
+
+    // 1. Validate & copy source device string from userspace (-EFAULT on invalid pointer)
+    var source_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+    const source_str = readUserCString(source_ptr, &source_buf) catch |err| return errno_mod.toReturn(err);
+    _ = source_str;
+
+    // 2. Validate & copy target mount point path from userspace (-EFAULT on invalid pointer)
     var target_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
     const target_str = readUserCString(target_ptr, &target_buf) catch |err| return errno_mod.toReturn(err);
+    if (target_str.len == 0) return errno_mod.toReturn(.ENOENT);
+
+    // 3. Validate & copy filesystem type string from userspace (-EFAULT on invalid pointer)
+    var fstype_buf: [64]u8 = undefined;
+    const fstype_str = readUserCString(fstype_ptr, &fstype_buf) catch |err| return errno_mod.toReturn(err);
+
+    // 4. Validate filesystem type (Tinux supports "tarfs" for block device mounts)
+    if (!std.mem.eql(u8, fstype_str, "tarfs")) {
+        return errno_mod.toReturn(.ENODEV);
+    }
+
+    // 5. Canonicalize target path and reject root / empty mount points
     const target_canonical = vfs.normalizePath(target_str);
     if (target_canonical.len == 0) return errno_mod.toReturn(.EINVAL);
-    _ = vfs.registerNode(target_canonical, vfs.S_IFDIR | 0o755, "");
+
+    // 6. Verify mount point exists in VFS and is a directory (-ENOENT / -ENOTDIR)
+    const target_idx = vfs.lookupExact(target_canonical) orelse return errno_mod.toReturn(.ENOENT);
+    const node = vfs.getNode(target_idx);
+    if (!node.isDir()) {
+        return errno_mod.toReturn(.ENOTDIR);
+    }
+
+    // 7. Verify not already mounted (-EBUSY)
+    if (tarfs.isMounted()) {
+        return errno_mod.toReturn(.EBUSY);
+    }
+
+    // 8. Mount USTAR filesystem from block device and update dynamic /proc/mounts
     _ = tarfs.mountFromDisk(target_canonical) catch |err| return errno_mod.toReturn(err);
     procfs.refreshMounts();
     return 0;
