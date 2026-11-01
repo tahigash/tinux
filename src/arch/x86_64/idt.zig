@@ -53,6 +53,7 @@ pub const IdtEntry = extern struct {
 pub const IdtGate = IdtEntry;
 
 var idt_entries: [256]IdtEntry align(16) = [_]IdtEntry{.{}} ** 256;
+var idtr: [10]u8 align(16) = undefined;
 extern const isr_stub_table: [37]usize;
 
 pub var breakpoint_hit_count: usize = 0;
@@ -81,7 +82,6 @@ pub fn init() void {
         }
     }
 
-    var idtr: [10]u8 align(16) = undefined;
     const idt_limit: u16 = @intCast(@sizeOf(@TypeOf(idt_entries)) - 1);
     const idt_base: u64 = @intFromPtr(&idt_entries);
     std.mem.writeInt(u16, idtr[0..2], idt_limit, .little);
@@ -91,6 +91,15 @@ pub fn init() void {
         \\ lidt (%[idtr])
         :
         : [idtr] "r" (&idtr),
+        : "memory"
+    );
+}
+
+pub fn loadIdtOnAp() void {
+    asm volatile (
+        \\ lidt (%[p])
+        :
+        : [p] "r" (&idtr),
         : "memory"
     );
 }

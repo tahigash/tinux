@@ -9,7 +9,10 @@ const virtio_blk = @import("../drivers/virtio_blk.zig");
 const tarfs = @import("tarfs.zig");
 const virtio_net = @import("../drivers/virtio_net.zig");
 const netstack = @import("../net/netstack.zig");
+const apic = @import("../arch/x86_64/apic.zig");
 
+var cpuinfo_buf: [1024]u8 = undefined;
+var stat_buf: [512]u8 = undefined;
 var meminfo_buf: [256]u8 = undefined;
 var uptime_buf: [64]u8 = undefined;
 var proc_stat_bufs: [task.MAX_TASKS][256]u8 = undefined;
@@ -31,6 +34,52 @@ var syscalls_buf: [4096]u8 = undefined;
 var strace_buf: [256]u8 = undefined;
 var partitions_buf: [128]u8 = undefined;
 var mounts_buf: [256]u8 = undefined;
+
+pub fn refreshCpuinfo() void {
+    const cpus = apic.getOnlineCpuCount();
+    var pos: usize = 0;
+    for (0..cpus) |i| {
+        var block_buf: [256]u8 = undefined;
+        const block = std.fmt.bufPrint(
+            &block_buf,
+            "processor : {d}\nvendor_id : TinuxZig\nmodel name : Tinux Virtual SMP x86_64 CPU\ncpu MHz : 3000.000\napicid : {d}\n",
+            .{ i, i },
+        ) catch continue;
+        if (pos + block.len <= cpuinfo_buf.len) {
+            @memcpy(cpuinfo_buf[pos .. pos + block.len], block);
+            pos += block.len;
+        }
+    }
+    _ = vfs.registerNode("proc/cpuinfo", vfs.S_IFREG | 0o444, cpuinfo_buf[0..pos]);
+}
+
+pub fn refreshStat() void {
+    const cpus = apic.getOnlineCpuCount();
+    var pos: usize = 0;
+    var agg_buf: [128]u8 = undefined;
+    const agg = std.fmt.bufPrint(
+        &agg_buf,
+        "cpu  {d} 0 {d} {d} 0 0 0 0 0 0\n",
+        .{ 100 * cpus, 100 * cpus, 1000 * cpus },
+    ) catch "cpu  100 0 100 1000 0 0 0 0 0 0\n";
+    if (pos + agg.len <= stat_buf.len) {
+        @memcpy(stat_buf[pos .. pos + agg.len], agg);
+        pos += agg.len;
+    }
+    for (0..cpus) |i| {
+        var cpu_line_buf: [128]u8 = undefined;
+        const line = std.fmt.bufPrint(
+            &cpu_line_buf,
+            "cpu{d} 100 0 100 1000 0 0 0 0 0 0\n",
+            .{i},
+        ) catch continue;
+        if (pos + line.len <= stat_buf.len) {
+            @memcpy(stat_buf[pos .. pos + line.len], line);
+            pos += line.len;
+        }
+    }
+    _ = vfs.registerNode("proc/stat", vfs.S_IFREG | 0o444, stat_buf[0..pos]);
+}
 
 pub fn refreshMounts() void {
     if (tarfs.isMounted()) {
@@ -63,11 +112,7 @@ pub fn initAndRegister() void {
         vfs.S_IFREG | 0o444,
         "Linux version 6.6.0-tinux (zig@tinux) #1 SMP PREEMPT Tinux 2026\n",
     );
-    _ = vfs.registerNode(
-        "proc/cpuinfo",
-        vfs.S_IFREG | 0o444,
-        "processor\t: 0\nvendor_id\t: TinuxZig\nmodel name\t: Tinux x86_64 Virtual CPU\ncpu MHz\t\t: 3000.000\n",
-    );
+    refreshCpuinfo();
     _ = vfs.registerNode(
         "proc/uptime",
         vfs.S_IFREG | 0o444,
@@ -79,11 +124,7 @@ pub fn initAndRegister() void {
         vfs.S_IFREG | 0o444,
         "console=ttyS0 root=/dev/ram0 rw\n",
     );
-    _ = vfs.registerNode(
-        "proc/stat",
-        vfs.S_IFREG | 0o444,
-        "cpu  100 0 100 1000 0 0 0 0 0 0\ncpu0 100 0 100 1000 0 0 0 0 0 0\n",
-    );
+    refreshStat();
     _ = vfs.registerNode("proc/net", vfs.S_IFDIR | 0o555, "");
     _ = vfs.registerNode(
         "proc/net/tcp",
@@ -292,6 +333,8 @@ pub fn refreshDynamicNodes() void {
     }
     _ = vfs.registerNode("proc/net/dev", vfs.S_IFREG | 0o444, net_dev_buf[0..dev_pos]);
 
+    refreshCpuinfo();
+    refreshStat();
     refreshMounts();
     syncProcessNodes();
 }

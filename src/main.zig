@@ -22,6 +22,7 @@ const virtio_blk = @import("drivers/virtio_blk.zig");
 const virtio_net = @import("drivers/virtio_net.zig");
 const netstack = @import("net/netstack.zig");
 const signal = @import("proc/signal.zig");
+const apic = @import("arch/x86_64/apic.zig");
 
 // Embedded initramfs archive provided via build system (.cache/initramfs.cpio)
 const initramfs = @import("initramfs");
@@ -360,6 +361,11 @@ fn runFullKernel(target_task: TaskId) noreturn {
 
     heap.init();
     serial.writeString("[TINUX_HEAP] std.mem.Allocator kernel heap & coalescing verified\n");
+
+    if (@intFromEnum(target_task) >= @intFromEnum(TaskId.TASK_020)) {
+        const cpus = apic.initAndBootSmp(2);
+        serial.print("[TINUX_APIC] Local APIC & IOAPIC initialized ({d} CPUs online, IOAPIC redir={d})\n", .{ cpus, apic.getIoapicRedirCount() });
+    }
 
     syscall_arch.init();
     serial.writeString("[TINUX_SYSCALL] MSRs (EFER.SCE, STAR, LSTAR, FMASK) configured\n");

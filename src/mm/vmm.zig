@@ -168,8 +168,14 @@ pub fn init() void {
         }
     }
 
+    // Map Local APIC & IOAPIC MMIO with PTE_CACHE_DISABLE
+    _ = mapPage(kernel_pml4_phys, 0xFEC0_0000, 0xFEC0_0000, PTE_PRESENT | PTE_WRITABLE | PTE_CACHE_DISABLE);
+    _ = mapPage(kernel_pml4_phys, 0xFEE0_0000, 0xFEE0_0000, PTE_PRESENT | PTE_WRITABLE | PTE_CACHE_DISABLE);
+
     loadCr3(kernel_pml4_phys);
 }
+
+pub const cloneKernelPml4 = createFreshUserPml4;
 
 pub fn createFreshUserPml4() ?usize {
     const src_pml4 = @as(*PageTable, @ptrFromInt(kernel_pml4_phys));
@@ -201,6 +207,9 @@ pub fn createFreshUserPml4() ?usize {
             dst_pdpt.entries[pdpti] = pdpte;
         }
     }
+
+    // Explicitly share 3..4 GiB Kernel MMIO (LAPIC 0xFEE0_0000 / IOAPIC 0xFEC0_0000 at pdptIndex == 3)
+    dst_pdpt.entries[3] = src_pdpt.entries[3];
 
     return dst_pml4_phys;
 }

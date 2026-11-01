@@ -490,14 +490,23 @@ for cmd in commands:
             ;;
 
         20)
-            cat << 'EOF'
-echo "[TINUX_SH] Running SMP multi-core affinity & getcpu verification..."
-/bin/smp_test
-echo "[TINUX_SH] Inspecting multi-core /proc/cpuinfo:"
-/bin/cat /proc/cpuinfo
-echo "[TINUX_SMP_DONE] Local APIC, IOAPIC, INIT-SIPI-SIPI AP boot, and SMP syscalls verified!"
-exit 0
-EOF
+            "$PYTHON_BIN" -c '
+import sys, time
+commands = [
+    "echo \"[TINUX_SH] Running SMP multi-core affinity & getcpu verification...\"\n",
+    "/bin/smp_test\n",
+    "echo \"[TINUX_SH] Inspecting multi-core /proc/cpuinfo:\"\n",
+    "/bin/cat /proc/cpuinfo\n",
+    "echo \"[TINUX_SMP_DONE] Local APIC, IOAPIC, INIT-SIPI-SIPI AP boot, and SMP syscalls verified!\"\n",
+    "exit 0\n"
+]
+for cmd in commands:
+    for ch in cmd:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(0.001)
+    time.sleep(0.05)
+'
             ;;
     esac
 }

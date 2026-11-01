@@ -25,6 +25,7 @@ const tarfs = @import("../fs/tarfs.zig");
 const virtio_net = @import("../drivers/virtio_net.zig");
 const netstack = @import("../net/netstack.zig");
 const signal = @import("../proc/signal.zig");
+const apic = @import("../arch/x86_64/apic.zig");
 
 pub const SYS_READ: u64 = 0;
 pub const SYS_WRITE: u64 = 1;
@@ -48,6 +49,7 @@ pub const SYS_READV: u64 = 19;
 pub const SYS_WRITEV: u64 = 20;
 pub const SYS_ACCESS: u64 = 21;
 pub const SYS_PIPE: u64 = 22;
+pub const SYS_SCHED_YIELD: u64 = 24;
 pub const SYS_DUP: u64 = 32;
 pub const SYS_DUP2: u64 = 33;
 pub const SYS_PAUSE: u64 = 34;
@@ -101,6 +103,8 @@ pub const SYS_MOUNT: u64 = 165;
 pub const SYS_UMOUNT2: u64 = 166;
 pub const SYS_GETTID: u64 = 186;
 pub const SYS_FUTEX: u64 = 202;
+pub const SYS_SCHED_SETAFFINITY: u64 = 203;
+pub const SYS_SCHED_GETAFFINITY: u64 = 204;
 pub const SYS_EPOLL_CREATE: u64 = 213;
 pub const SYS_GETDENTS64: u64 = 217;
 pub const SYS_SET_TID_ADDRESS: u64 = 218;
@@ -125,6 +129,7 @@ pub const SYS_EPOLL_CREATE1: u64 = 291;
 pub const SYS_DUP3: u64 = 292;
 pub const SYS_PIPE2: u64 = 293;
 pub const SYS_PRLIMIT64: u64 = 302;
+pub const SYS_GETCPU: u64 = 309;
 pub const SYS_GETRANDOM: u64 = 318;
 pub const SYS_STATX: u64 = 332;
 pub const SYS_FACCESSAT2: u64 = 439;
@@ -2648,6 +2653,72 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 cur_task.wait_epoll_idx = ep_idx;
                 do_block = true;
             }
+        },
+
+        SYS_SCHED_YIELD => {
+            res = 0;
+        },
+
+        SYS_SCHED_SETAFFINITY => {
+            const pid = a1;
+            const cpusetsize = a2;
+            const mask_ptr = a3;
+            _ = pid;
+            if (mask_ptr == 0 or (cpusetsize > 0 and !validateUserBuffer(mask_ptr, cpusetsize))) {
+                res = errno_mod.toReturn(.EFAULT);
+            } else {
+                res = 0;
+            }
+        },
+
+        SYS_SCHED_GETAFFINITY => {
+            const pid = a1;
+            const cpusetsize = a2;
+            const mask_ptr = a3;
+            _ = pid;
+            if (cpusetsize < @sizeOf(u64)) {
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
+            }
+            if (mask_ptr == 0 or !validateUserBuffer(mask_ptr, @sizeOf(u64))) {
+                res = errno_mod.toReturn(.EFAULT);
+                break :blk;
+            }
+            const online = apic.getOnlineCpuCount();
+            const cpus: u6 = @intCast(@min(online, 64));
+            const active_mask: u64 = if (cpus == 64) std.math.maxInt(u64) else (@as(u64, 1) << cpus) - 1;
+            @memcpy(@as([*]u8, @ptrFromInt(mask_ptr))[0..8], std.mem.asBytes(&active_mask));
+            if (cpusetsize > 8) {
+                const extra = cpusetsize - 8;
+                if (validateUserBuffer(mask_ptr + 8, extra)) {
+                    @memset(@as([*]u8, @ptrFromInt(mask_ptr + 8))[0..extra], 0);
+                }
+            }
+            res = 8;
+        },
+
+        SYS_GETCPU => {
+            const cpu_ptr = a1;
+            const node_ptr = a2;
+            const tcache = a3;
+            _ = tcache;
+            if (cpu_ptr != 0) {
+                if (!validateUserBuffer(cpu_ptr, @sizeOf(u32))) {
+                    res = errno_mod.toReturn(.EFAULT);
+                    break :blk;
+                }
+                const cur_cpu: u32 = apic.readLapicId();
+                @memcpy(@as([*]u8, @ptrFromInt(cpu_ptr))[0..4], std.mem.asBytes(&cur_cpu));
+            }
+            if (node_ptr != 0) {
+                if (!validateUserBuffer(node_ptr, @sizeOf(u32))) {
+                    res = errno_mod.toReturn(.EFAULT);
+                    break :blk;
+                }
+                const cur_node: u32 = 0;
+                @memcpy(@as([*]u8, @ptrFromInt(node_ptr))[0..4], std.mem.asBytes(&cur_node));
+            }
+            res = 0;
         },
 
         else => res = errno_mod.toReturn(.ENOSYS),

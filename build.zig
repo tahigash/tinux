@@ -43,6 +43,7 @@ pub fn build(b: *std.Build) void {
     kernel.addAssemblyFile(b.path("src/arch/x86_64/boot.S"));
     kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_entry.S"));
     kernel.addAssemblyFile(b.path("src/arch/x86_64/isr.S"));
+    kernel.addAssemblyFile(b.path("src/arch/x86_64/ap_trampoline.S"));
 
     kernel.setLinkerScript(b.path("linker.ld"));
 
