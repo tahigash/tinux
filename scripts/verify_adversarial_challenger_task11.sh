@@ -148,7 +148,8 @@ timeout 15 qemu-system-x86_64 \
 cat "$LOG_FILE"
 
 # Clean up binaries in .cache/initramfs_root to satisfy license guardrails
-rm -rf "$INITRAMFS_ROOT/bin" "$INITRAMFS_ROOT/lib" "$INITRAMFS_ROOT/usr" "$INITRAMFS_ROOT/tmp"
+rm -f "$INITRAMFS_ROOT/bin/"* "$INITRAMFS_ROOT/lib/"* "$INITRAMFS_ROOT/tmp/"* 2>/dev/null || true
+rm -rf "$INITRAMFS_ROOT/usr" 2>/dev/null || true
 
 if grep -q "ALL 5 ADVERSARIAL CHALLENGES EMPIRICALLY CONFIRMED" "$LOG_FILE"; then
     echo "[CHALLENGER11_HARNESS] SUCCESS: All TASK-011 adversarial challenges passed cleanly!"
