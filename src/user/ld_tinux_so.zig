@@ -6,7 +6,7 @@ const AT_PHNUM: u64 = 5;
 const AT_BASE: u64 = 7;
 const AT_ENTRY: u64 = 9;
 
-export fn _start() callconv(.Naked) noreturn {
+pub export fn _start() callconv(.Naked) noreturn {
     asm volatile (
         \\ movq %rsp, %rdi
         \\ andq $-16, %rsp
@@ -117,3 +117,5 @@ export fn ldMain(initial_rsp: [*]const u64) callconv(.C) noreturn {
     );
     unreachable;
 }
+
+pub fn main() void {}

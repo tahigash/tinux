@@ -1,6 +1,6 @@
 # Tinux Kickoff Procedure (`KICKOFF_GUIDE.md`)
 
-> **Target Workflow:** Google Antigravity IDE / CLI  
+> **Target Workflow:** Autonomous AI Engineering Environment / CLI  
 > **Scope:** Full 20-Milestone Autonomous Execution (`TASK-001` .. `TASK-020`)
 
 ---
@@ -89,7 +89,7 @@ watch -n 2 'head -n 25 PROGRESS.md'
 
 ## Step 4: Builder Agent Kickoff Prompt
 
-1. Open the agent panel in Google Antigravity and select **`Gemini 3.8 Flash High`**.
+1. Open the agent panel and configure the autonomous builder agent.
 2. Paste and send the following kickoff prompt:
 
 ```text

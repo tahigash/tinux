@@ -4,7 +4,7 @@
 [![Architecture: x86_64](https://img.shields.io/badge/arch-x86__64-blue.svg)](#architecture-overview)
 [![Language: Zig](https://img.shields.io/badge/language-Zig-f7a41d.svg)](https://ziglang.org/)
 [![ABI: Linux x86_64](https://img.shields.io/badge/ABI-Linux%20x86__64-success.svg)](#supported-linux-system-calls)
-[![Engineered with: Google Antigravity](https://img.shields.io/badge/IDE-Google%20Antigravity-4285F4.svg)](#the-architect-builder-hdae-methodology)
+[![Engineered with: Autonomous AI Agents](https://img.shields.io/badge/Engineered%20with-Autonomous%20AI%20Agents-blue.svg)](#the-architect-builder-hdae-methodology)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 ---
@@ -79,11 +79,11 @@ Tinux is an x86_64 operating system kernel written from scratch in Zig that impl
 
 ## The Architect-Builder HDAE Methodology
 
-Tinux was developed using an **Architect-Builder Human-Directed Agentic Engineering (HDAE)** workflow on **Google Antigravity**:
+Tinux was developed using an **Architect-Builder Human-Directed Agentic Engineering (HDAE)** workflow powered by autonomous AI agents:
 
-1. **System Architect (`Gemini 4 Argon`):** Designs the global kernel subsystem boundaries, virtual memory layout, and interface contracts.
-2. **Low-Level & ABI Auditor (`Claude Opus 5.5`):** Audits every specification for x86_64 register clobbers, 16-byte stack alignments, and Linux ABI compliance.
-3. **High-Speed Autonomous Builder (`Gemini 3.8 Flash High`):** Executes each micro-specification (`TASK-001` through `TASK-020`) with strict test-driven verification.
+1. **System Architect (AI System Architect):** Designs the global kernel subsystem boundaries, virtual memory layout, and interface contracts.
+2. **Low-Level & ABI Auditor (AI Code Auditor):** Audits every specification for x86_64 register clobbers, 16-byte stack alignments, and Linux ABI compliance.
+3. **High-Speed Autonomous Builder (Autonomous AI Builder):** Executes each micro-specification (`TASK-001` through `TASK-020`) with strict test-driven verification.
 
 ### 20-Stage Verification Roadmap
 
@@ -199,9 +199,9 @@ The name is a blend of **Linux**, **Transformer**, and the author's first name (
 
 * **Binary compatibility:** Standard Linux user-space binaries run without modification because Tinux implements the expected syscall interfaces, data structures, and memory layouts.
 * **Architect-Builder model:**
-  * **System architecture and test harnesses:** Gemini 4 Argon
-  * **Low-level verification and ABI auditing:** Claude Opus 5.5
-  * **Implementation and testing loops:** Gemini 3.8 Flash High (with a 3-strike escalation circuit breaker to stop and report unresolvable failures)
+  * **System architecture and test harnesses:** AI System Architect
+  * **Low-level verification and ABI auditing:** AI Code Auditor
+  * **Implementation and testing loops:** Autonomous AI Builder (with a 3-strike escalation circuit breaker to stop and report unresolvable failures)
 
 ---
 

@@ -85,12 +85,25 @@ pub fn closeWriter(idx: usize) void {
         if (pipes[idx].writers > 0) pipes[idx].writers -= 1;
         if (pipes[idx].writers == 0) {
             task.wakePipeWaiters(idx);
+            task.wakeEpollWaiters();
         }
         if (pipes[idx].readers == 0 and pipes[idx].writers == 0) {
             pipes[idx].in_use = false;
         }
     }
 }
+
+pub fn getPipe(idx: usize) ?*const Pipe {
+    if (idx >= MAX_PIPES or !pipes[idx].in_use) return null;
+    return &pipes[idx];
+}
+
+pub const allocPipe = alloc;
+pub const retainRead = retainReader;
+pub const retainWrite = retainWriter;
+pub const closeRead = closeReader;
+pub const closeWrite = closeWriter;
+pub const writePipe = write;
 
 pub fn read(idx: usize, dst: []u8) PipeReadResult {
     if (idx >= MAX_PIPES or !pipes[idx].in_use) return .{ .status = .eof, .n = 0 };
@@ -103,6 +116,7 @@ pub fn read(idx: usize, dst: []u8) PipeReadResult {
         }
         p.count -= to_read;
         task.wakePipeWaiters(idx);
+        task.wakeEpollWaiters();
         return .{ .status = .bytes, .n = to_read };
     }
     if (p.writers == 0) {
@@ -126,6 +140,7 @@ pub fn write(idx: usize, src: []const u8) PipeWriteResult {
         }
         p.count += to_write;
         task.wakePipeWaiters(idx);
+        task.wakeEpollWaiters();
         return .{ .status = .bytes, .n = to_write };
     }
     return .{ .status = .would_block, .n = 0 };

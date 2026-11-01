@@ -1,11 +1,11 @@
 # Tinux Implementation Specification: TASK-019
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
-> * **Architect (Structure & Harness):** Gemini 4 Argon
-> * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
-> * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
+> * **Architect (Structure & Harness):** AI System Architect
+> * **Auditor (Low-Level & ABI Contract):** AI Code Auditor
+> * **Target Builder:** Autonomous AI Builder Agent
 > * **Prerequisite:** `TASK-018` Passed (`./scripts/verify_qemu.sh TASK-018 10` == Exit Code 0)
 ---
-## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
+## 0. Builder Agent Operating Rules (For Autonomous AI Builder)
 You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
    Implement the exact protocol definitions: `UdpHdr` (8 bytes), IPv4 UDP framing, `Socket` datagram queues, and direct datagram delivery.
@@ -47,7 +47,7 @@ You are the **Implementation Builder**. Implement the requirements adhering stri
   * `src/drivers/virtio_net.zig`
   * `src/proc/signal.zig`
 ---
-## 3. Hardware, Protocol & Linux ABI Contract (Opus 5.5 Audited)
+## 3. Hardware, Protocol & Linux ABI Contract (AI Audited)
 ### 3.1 UDP/IPv4 Wire Protocol & Demultiplexing Contract
 In QEMU user-mode networking (`-netdev user`), the gateway host is `10.0.2.2` and the virtual DNS server is `10.0.2.3` listening on UDP port `53`.
 | Header / Field | Byte Offset | Size | Format & Wire Behavior |
@@ -438,6 +438,6 @@ If compilation or `./scripts/verify_qemu.sh TASK-019 10` fails 3 consecutive tim
 ```diff
 [Relevant code diff for src/net/netstack.zig, src/net/socket.zig, src/syscall/dispatch.zig]
 ```
-## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
+## 4. Suspected Root Cause (For AI Architect / Auditor Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]
 ```

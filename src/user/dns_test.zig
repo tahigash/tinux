@@ -97,13 +97,13 @@ export fn dnsTestMain() callconv(.C) noreturn {
     };
     if (syscall3(49, @intCast(lo_fd), @intFromPtr(&lo_addr), @sizeOf(SockAddrIn)) != 0) failExit(13);
     const lo_msg = "UDP_LOOPBACK_OK";
-    if (syscall6(44, @intCast(lo_fd), @intFromPtr(lo_msg.ptr), lo_msg.len, 0, @intFromPtr(&lo_addr), 16) != lo_msg.l
+    if (syscall6(44, @intCast(lo_fd), @intFromPtr(lo_msg.ptr), lo_msg.len, 0, @intFromPtr(&lo_addr), 16) != lo_msg.len) {
         failExit(14);
     }
     var lo_rx: [32]u8 = undefined;
     var lo_from: SockAddrIn = undefined;
     var lo_from_len: u32 = 16;
-    const lo_n = syscall6(45, @intCast(lo_fd), @intFromPtr(&lo_rx), lo_rx.len, 0, @intFromPtr(&lo_from), @intFromPtr
+    const lo_n = syscall6(45, @intCast(lo_fd), @intFromPtr(&lo_rx), lo_rx.len, 0, @intFromPtr(&lo_from), @intFromPtr(&lo_from_len));
     if (lo_n != lo_msg.len or lo_from.sin_port != std.mem.nativeToBig(u16, 5353)) failExit(15);
     writeStdout("[TINUX_UDP] Local UDP SOCK_DGRAM bind/sendto/recvfrom on 127.0.0.1:5353 verified!\n");
     // 3. Build RFC 1035 DNS A-Record Query for "example.com" -> 10.0.2.3:53
@@ -147,6 +147,8 @@ export fn dnsTestMain() callconv(.C) noreturn {
         @intFromPtr(&dns_from_len),
     );
     if (resp_len < 33) failExit(19);
+
+
     // Verify Transaction ID (0x42, 0x24), QR=1 (Response bit 0x80 in byte 2), and ANCOUNT >= 1
     if (dns_resp[0] != 0x42 or dns_resp[1] != 0x24) failExit(20);
     if ((dns_resp[2] & 0x80) == 0) failExit(21);

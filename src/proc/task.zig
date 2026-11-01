@@ -4,9 +4,11 @@ const vmm = @import("../mm/vmm.zig");
 const vfs = @import("../fs/vfs.zig");
 const syscall_arch = @import("../arch/x86_64/syscall.zig");
 const SyscallFrame = syscall_arch.SyscallFrame;
+const signal = @import("signal.zig");
 
 pub const MAX_TASKS: usize = 16;
-pub const KERNEL_STACK_SIZE: usize = 16384;
+pub const KERNEL_STACK_SIZE: usize = 32768;
+pub const KSTACK_SIZE: usize = KERNEL_STACK_SIZE;
 pub const DEFAULT_MMAP_BASE: usize = 0x2000_0000;
 
 pub const TaskState = enum(u8) {
@@ -24,6 +26,30 @@ pub const TaskState = enum(u8) {
     WAITING_EPOLL = 11,
     WAITING_SIGNAL = 12,
     WAITING_SOCK_ACCEPT = 13,
+
+    pub const RUNNABLE = TaskState.READY;
+    pub const WAITING = TaskState.WAITING_CHILD;
+    pub const BLOCKED = TaskState.WAITING_CHILD;
+
+    pub fn isRunnable(self: TaskState) bool {
+        return self == .READY or self == .RUNNING;
+    }
+
+    pub fn isBlocked(self: TaskState) bool {
+        return switch (self) {
+            .WAITING_CHILD,
+            .WAITING_PIPE_READ,
+            .WAITING_PIPE_WRITE,
+            .WAITING_SLEEP,
+            .WAITING_TTY,
+            .WAITING_SOCK_READ,
+            .WAITING_SOCK_ACCEPT,
+            .WAITING_FUTEX,
+            .WAITING_EPOLL,
+            .WAITING_SIGNAL => true,
+            else => false,
+        };
+    }
 };
 
 pub const Task = struct {
@@ -48,17 +74,44 @@ pub const Task = struct {
     wait_sock_idx: usize = 0,
     wait_futex_paddr: usize = 0,
     wait_epoll_idx: usize = 0,
+    wake_tick: u64 = 0,
     sleep_wake_tick: u64 = 0,
     alarm_wake_tick: u64 = 0,
+    itimer_interval_ticks: u64 = 0,
+    sigactions: [65]signal.KernelSigAction = [_]signal.KernelSigAction{.{}} ** 65,
+    pending_signals: u64 = 0,
+    sig_mask: u64 = 0,
+    in_signal_handler: bool = false,
+    last_sigframe_vaddr: usize = 0,
     clear_child_tid: usize = 0,
     cwd_buf: [vfs.MAX_PATH_LEN]u8 = [_]u8{'/'} ++ [_]u8{0} ** (vfs.MAX_PATH_LEN - 1),
     cwd_len: usize = 1,
     comm_buf: [32]u8 = [_]u8{0} ** 32,
     comm_len: usize = 0,
+    exe_path_buf: [vfs.MAX_PATH_LEN]u8 = [_]u8{0} ** vfs.MAX_PATH_LEN,
+    exe_path_len: usize = 0,
+    cmdline_buf: [128]u8 = [_]u8{0} ** 128,
+    cmdline_len: usize = 0,
     fd_table: [vfs.MAX_OPEN_FILES]vfs.FdEntry = [_]vfs.FdEntry{.{}} ** vfs.MAX_OPEN_FILES,
+
+    pub fn kstackTop(self: *const Task) usize {
+        return self.kernel_stack_top;
+    }
 
     pub fn cwd(self: *const Task) []const u8 {
         return self.cwd_buf[0..self.cwd_len];
+    }
+
+    pub fn setExePath(self: *Task, path: []const u8) void {
+        const n = @min(path.len, self.exe_path_buf.len - 1);
+        @memset(&self.exe_path_buf, 0);
+        @memcpy(self.exe_path_buf[0..n], path[0..n]);
+        self.exe_path_len = n;
+    }
+
+    pub fn exePath(self: *const Task) []const u8 {
+        if (self.exe_path_len > 0) return self.exe_path_buf[0..self.exe_path_len];
+        return self.comm();
     }
 
     pub fn setComm(self: *Task, name: []const u8) void {
@@ -74,14 +127,42 @@ pub const Task = struct {
         return self.comm_buf[0..self.comm_len];
     }
 
+    pub fn setCmdline(self: *Task, argv: []const []const u8) void {
+        @memset(&self.cmdline_buf, 0);
+        var pos: usize = 0;
+        for (argv, 0..) |arg, i| {
+            if (i > 0 and pos < self.cmdline_buf.len) {
+                self.cmdline_buf[pos] = ' ';
+                pos += 1;
+            }
+            const copy_len = @min(arg.len, self.cmdline_buf.len - pos);
+            @memcpy(self.cmdline_buf[pos .. pos + copy_len], arg[0..copy_len]);
+            pos += copy_len;
+            if (pos >= self.cmdline_buf.len) break;
+        }
+        self.cmdline_len = pos;
+    }
+
+    pub fn cmdline(self: *const Task) []const u8 {
+        if (self.cmdline_len == 0) return self.comm();
+        return self.cmdline_buf[0..self.cmdline_len];
+    }
+
     pub fn closeAllFds(self: *Task) void {
         const pipe_mod = @import("../fs/pipe.zig");
         const sock_mod = @import("../net/socket.zig");
+        const epoll_mod = @import("../fs/epoll.zig");
         for (&self.fd_table) |*e| {
             switch (e.kind) {
                 .PIPE_READ => pipe_mod.closeReader(e.node_idx),
                 .PIPE_WRITE => pipe_mod.closeWriter(e.node_idx),
-                .SOCKET => sock_mod.close(e.node_idx),
+                .SOCKET => {
+                    const s_idx = if (e.sock_idx != 0) e.sock_idx else e.node_idx;
+                    if (sock_mod.close(s_idx)) |peer_idx| {
+                        wakeSocketReadWaiters(peer_idx);
+                    }
+                },
+                .EPOLL => epoll_mod.close(e.node_idx),
                 else => {},
             }
             e.* = .{};
@@ -91,12 +172,19 @@ pub const Task = struct {
     pub fn closeCloexecFds(self: *Task) void {
         const pipe_mod = @import("../fs/pipe.zig");
         const sock_mod = @import("../net/socket.zig");
+        const epoll_mod = @import("../fs/epoll.zig");
         for (&self.fd_table) |*e| {
             if (e.cloexec and e.kind != .UNUSED) {
                 switch (e.kind) {
                     .PIPE_READ => pipe_mod.closeReader(e.node_idx),
                     .PIPE_WRITE => pipe_mod.closeWriter(e.node_idx),
-                    .SOCKET => sock_mod.close(e.node_idx),
+                    .SOCKET => {
+                        const s_idx = if (e.sock_idx != 0) e.sock_idx else e.node_idx;
+                        if (sock_mod.close(s_idx)) |peer_idx| {
+                            wakeSocketReadWaiters(peer_idx);
+                        }
+                    },
+                    .EPOLL => epoll_mod.close(e.node_idx),
                     else => {},
                 }
                 e.* = .{};
@@ -118,6 +206,24 @@ pub fn currentTaskIndex() usize {
     return current_task_idx;
 }
 
+pub fn getTaskByPid(pid: usize) ?*Task {
+    for (&tasks) |*t| {
+        if (t.state != .UNUSED and t.pid == pid) {
+            return t;
+        }
+    }
+    return null;
+}
+
+pub fn getTaskIndexByPid(pid: usize) ?usize {
+    for (&tasks, 0..) |*t, idx| {
+        if (t.state != .UNUSED and t.pid == pid) {
+            return idx;
+        }
+    }
+    return null;
+}
+
 pub fn initPid1(pml4_phys: usize, initial_brk: usize, comm_name: []const u8) *Task {
     tasks[0] = .{
         .pid = 1,
@@ -131,6 +237,7 @@ pub fn initPid1(pml4_phys: usize, initial_brk: usize, comm_name: []const u8) *Ta
     };
     tasks[0].kernel_stack_top = @intFromPtr(&task_kernel_stacks[0]) + KERNEL_STACK_SIZE;
     tasks[0].setComm(comm_name);
+    tasks[0].setExePath(comm_name);
     vfs.initTaskFdTable(&tasks[0].fd_table);
     current_task_idx = 0;
     next_pid = 2;
@@ -180,19 +287,34 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
         .cwd_len = parent.cwd_len,
         .comm_buf = parent.comm_buf,
         .comm_len = parent.comm_len,
+        .exe_path_buf = parent.exe_path_buf,
+        .exe_path_len = parent.exe_path_len,
+        .cmdline_buf = parent.cmdline_buf,
+        .cmdline_len = parent.cmdline_len,
         .fd_table = parent.fd_table,
+        .sigactions = parent.sigactions,
+        .sig_mask = parent.sig_mask,
+        .pending_signals = 0,
+        .in_signal_handler = false,
+        .last_sigframe_vaddr = 0,
+        .alarm_wake_tick = 0,
+        .itimer_interval_ticks = 0,
     };
 
-    // Duplicate FDs and increase ref counts (pipe/socket)
+    // Duplicate FDs and increase ref counts (pipe/socket/epoll)
     const pipe_mod = @import("../fs/pipe.zig");
     const sock_mod = @import("../net/socket.zig");
+    const epoll_mod = @import("../fs/epoll.zig");
     for (&tasks[child_idx].fd_table) |*e| {
         if (e.kind == .PIPE_READ) {
             pipe_mod.retainReader(e.node_idx);
         } else if (e.kind == .PIPE_WRITE) {
             pipe_mod.retainWriter(e.node_idx);
         } else if (e.kind == .SOCKET) {
-            sock_mod.retain(e.node_idx);
+            const s_idx = if (e.sock_idx != 0) e.sock_idx else e.node_idx;
+            sock_mod.retain(s_idx);
+        } else if (e.kind == .EPOLL) {
+            epoll_mod.retain(e.node_idx);
         }
     }
 
@@ -203,6 +325,134 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
     tasks[child_idx].saved_frame = child_frame_ptr;
 
     return child_idx;
+}
+
+pub fn cloneCurrentTask(
+    parent_frame: *SyscallFrame,
+    flags: usize,
+    child_stack: usize,
+    ptid_ptr: usize,
+    ctid_ptr: usize,
+    newtls: usize,
+) ?usize {
+    var slot: ?usize = null;
+    for (&tasks, 0..) |*t, idx| {
+        if (t.state == .UNUSED) {
+            slot = idx;
+            break;
+        }
+    }
+    const child_idx = slot orelse return null;
+    const parent = currentTask();
+
+    const is_vm_shared = (flags & 0x0100) != 0; // CLONE_VM
+    const is_thread_flag = (flags & 0x0001_0000) != 0; // CLONE_THREAD
+    const is_settls = (flags & 0x0008_0000) != 0; // CLONE_SETTLS
+    const is_parent_settid = (flags & 0x0010_0000) != 0; // CLONE_PARENT_SETTID
+    const is_child_cleartid = (flags & 0x0020_0000) != 0; // CLONE_CHILD_CLEARTID
+    const is_child_settid = (flags & 0x0100_0000) != 0; // CLONE_CHILD_SETTID
+
+    const child_pml4 = if (is_vm_shared)
+        parent.pml4_phys
+    else
+        (vmm.cloneUserPml4(parent.pml4_phys) orelse return null);
+
+    const child_stack_top = @intFromPtr(&task_kernel_stacks[child_idx]) + KERNEL_STACK_SIZE;
+
+    const assigned_pid = next_pid;
+    next_pid += 1;
+
+    tasks[child_idx] = .{
+        .pid = assigned_pid,
+        .tgid = if (is_thread_flag) parent.tgid else assigned_pid,
+        .parent_pid = if (is_thread_flag) parent.parent_pid else parent.pid,
+        .pgid = parent.pgid,
+        .is_thread = is_thread_flag,
+        .state = .READY,
+        .pml4_phys = child_pml4,
+        .kernel_stack_top = child_stack_top,
+        .fs_base = if (is_settls) @intCast(newtls) else parent.fs_base,
+        .initial_brk = parent.initial_brk,
+        .current_brk = parent.current_brk,
+        .next_mmap_vaddr = parent.next_mmap_vaddr,
+        .clear_child_tid = if (is_child_cleartid) ctid_ptr else 0,
+        .cwd_buf = parent.cwd_buf,
+        .cwd_len = parent.cwd_len,
+        .comm_buf = parent.comm_buf,
+        .comm_len = parent.comm_len,
+        .exe_path_buf = parent.exe_path_buf,
+        .exe_path_len = parent.exe_path_len,
+        .cmdline_buf = parent.cmdline_buf,
+        .cmdline_len = parent.cmdline_len,
+        .fd_table = parent.fd_table,
+        .sigactions = parent.sigactions,
+        .sig_mask = parent.sig_mask,
+        .pending_signals = 0,
+        .in_signal_handler = false,
+        .last_sigframe_vaddr = 0,
+        .alarm_wake_tick = 0,
+        .itimer_interval_ticks = 0,
+    };
+
+    // If CLONE_PARENT_SETTID, write child PID to ptid_ptr
+    if (is_parent_settid and ptid_ptr != 0) {
+        if (vmm.translate(parent.pml4_phys, ptid_ptr)) |pa| {
+            std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(pa)), @intCast(assigned_pid), .little);
+        } else {
+            return null;
+        }
+    }
+
+    // If CLONE_CHILD_SETTID, write child PID to ctid_ptr
+    if (is_child_settid and ctid_ptr != 0) {
+        if (vmm.translate(child_pml4, ctid_ptr)) |pa| {
+            std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(pa)), @intCast(assigned_pid), .little);
+        } else {
+            return null;
+        }
+    }
+
+    // Duplicate FDs and increase ref counts (pipe/socket/epoll)
+    const pipe_mod = @import("../fs/pipe.zig");
+    const sock_mod = @import("../net/socket.zig");
+    const epoll_mod = @import("../fs/epoll.zig");
+    for (&tasks[child_idx].fd_table) |*e| {
+        if (e.kind == .PIPE_READ) {
+            pipe_mod.retainReader(e.node_idx);
+        } else if (e.kind == .PIPE_WRITE) {
+            pipe_mod.retainWriter(e.node_idx);
+        } else if (e.kind == .SOCKET) {
+            const s_idx = if (e.sock_idx != 0) e.sock_idx else e.node_idx;
+            sock_mod.retain(s_idx);
+        } else if (e.kind == .EPOLL) {
+            epoll_mod.retain(e.node_idx);
+        }
+    }
+
+    // Set up child's saved frame on child's kernel stack
+    const child_frame_ptr = @as(*SyscallFrame, @ptrFromInt(child_stack_top - @sizeOf(SyscallFrame)));
+    child_frame_ptr.* = parent_frame.*;
+    child_frame_ptr.rax = 0; // Clone return in child = 0
+    if (child_stack != 0) {
+        child_frame_ptr.user_rsp = child_stack;
+    }
+    tasks[child_idx].saved_frame = child_frame_ptr;
+
+    return child_idx;
+}
+
+pub fn exitCurrentTask(exit_status: i32) *SyscallFrame {
+    const cur = currentTask();
+    cur.state = .ZOMBIE;
+    cur.exit_status = exit_status;
+    cur.closeAllFds();
+    wakeParentIfWaiting(cur.parent_pid);
+    if (getTaskByPid(cur.parent_pid)) |parent| {
+        signal.sendSignalToTask(parent, signal.SIGCHLD);
+    }
+    const next_idx = scheduleNextOrWait();
+    activateTask(next_idx);
+    return signal.deliverPendingSignals(tasks[next_idx].saved_frame);
 }
 
 pub fn wakeParentIfWaiting(parent_pid: usize) void {
@@ -221,9 +471,14 @@ pub fn wakePipeWaiters(pipe_idx: usize) void {
     }
 }
 
+pub fn tickSleepWaiters() void {
+    const timer = @import("../drivers/timer.zig");
+    wakeSleepingTasks(timer.getTicks());
+}
+
 pub fn wakeSleepingTasks(now_ticks: u64) void {
     for (&tasks) |*t| {
-        if (t.state == .WAITING_SLEEP and now_ticks >= t.sleep_wake_tick) {
+        if (t.state == .WAITING_SLEEP and (now_ticks >= t.wake_tick or now_ticks >= t.sleep_wake_tick)) {
             t.state = .READY;
         }
     }
@@ -253,6 +508,28 @@ pub fn wakeSocketAcceptWaiters(sock_idx: usize) void {
     }
 }
 
+pub fn wakeEpollWaiters() void {
+    for (&tasks) |*t| {
+        if (t.state == .WAITING_EPOLL) {
+            t.state = .READY;
+            t.wait_epoll_idx = 0;
+        }
+    }
+}
+
+pub fn checkAlarmTimers(now_ticks: u64) void {
+    for (&tasks) |*t| {
+        if (t.state != .UNUSED and t.alarm_wake_tick > 0 and now_ticks >= t.alarm_wake_tick) {
+            if (t.itimer_interval_ticks > 0) {
+                t.alarm_wake_tick = now_ticks + t.itimer_interval_ticks;
+            } else {
+                t.alarm_wake_tick = 0;
+            }
+            signal.sendSignalToTask(t, signal.SIGALRM);
+        }
+    }
+}
+
 pub fn scheduleNextReady() ?usize {
     const start = (current_task_idx + 1) % MAX_TASKS;
     for (0..MAX_TASKS) |i| {
@@ -266,8 +543,14 @@ pub fn scheduleNextReady() ?usize {
 
 pub fn scheduleNextOrWait() usize {
     const timer = @import("../drivers/timer.zig");
+    const tty = @import("../drivers/tty.zig");
     while (true) {
-        wakeSleepingTasks(timer.getTicks());
+        const now = timer.getTicks();
+        checkAlarmTimers(now);
+        wakeSleepingTasks(now);
+        if (tty.hasReadableData()) {
+            wakeTtyWaiters();
+        }
 
         if (scheduleNextReady()) |next_idx| {
             return next_idx;

@@ -32,6 +32,20 @@ if ! command -v zig >/dev/null 2>&1; then
     done
 fi
 
+# Auto-detect QEMU emulator if not already in PATH
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    for candidate_dir in \
+        "/c/Users/takashi/bin/qemu" \
+        "/c/Program Files/qemu" \
+        "$HOME/bin/qemu" \
+        "/c/qemu"; do
+        if [[ -f "$candidate_dir/qemu-system-x86_64.exe" ]] || [[ -f "$candidate_dir/qemu-system-x86_64" ]]; then
+            export PATH="$candidate_dir:$PATH"
+            break
+        fi
+    done
+fi
+
 # Detect Python 3 interpreter (avoiding 0-byte WindowsApps alias in Git Bash)
 PYTHON_BIN=""
 for cand in python python3 py; do
@@ -68,14 +82,21 @@ else
 fi
 
 # Test and Emulator Tools: qemu-system-x86_64, cpio
-for cmd in qemu-system-x86_64 cpio; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-        VER=$("$cmd" --version 2>&1 | head -n 1 || true)
-        ok "$cmd ($VER)"
-    else
-        warn "Test/emulator tool '$cmd' not found (optional for build, required for qemu tests)"
-    fi
-done
+if command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    VER=$(qemu-system-x86_64 --version 2>&1 | head -n 1 || true)
+    ok "qemu-system-x86_64 ($VER)"
+else
+    warn "Test/emulator tool 'qemu-system-x86_64' not found (optional for build, required for qemu tests)"
+fi
+
+if [[ -f "tools/cpio_writer.py" ]] && [[ -n "$PYTHON_BIN" ]]; then
+    ok "cpio archive writer (tools/cpio_writer.py: Python newc archive writer)"
+elif command -v cpio >/dev/null 2>&1; then
+    VER=$(cpio --version 2>&1 | head -n 1 || true)
+    ok "cpio ($VER)"
+else
+    warn "External 'cpio' not found (fallback: tools/cpio_writer.py required)"
+fi
 
 # 2. Detect Zig Version & Calling Convention Style
 echo -e "\n${CYAN}[2/5] Probing Zig Compiler Version & Freestanding Target${NC}"

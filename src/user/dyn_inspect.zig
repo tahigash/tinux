@@ -1,9 +1,9 @@
 const std = @import("std");
 
-// Embed explicit .interp section so LLD emits PT_INTERP = "/lib/ld-musl-x86_64.so.1"
-pub export const interp_path: [25:0]u8 align(1) linksection(".interp") = "/lib/ld-musl-x86_64.so.1".*;
+pub export const interp_path = "/lib/ld-musl-x86_64.so.1\x00";
+pub export const abi_note: [32]u8 align(4) linksection(".note.tinux") = [_]u8{0} ** 32;
 
-export fn _start() callconv(.Naked) noreturn {
+pub export fn _start() callconv(.Naked) noreturn {
     asm volatile (
         \\ andq $-16, %rsp
         \\ call dynMain
@@ -35,6 +35,8 @@ fn writeStdout(msg: []const u8) void {
 }
 
 export fn dynMain() callconv(.C) noreturn {
+    asm volatile ("" : : [p1] "r" (&interp_path), [p2] "r" (&abi_note) : "memory");
+
     // Verify the shared object mapped by ld-musl at 0x2500_0000 is accessible in our address space
     const so_slice = @as([*]const u8, @ptrFromInt(0x2500_0000))[0..24];
     if (!std.mem.eql(u8, so_slice[0..8], "TINUX_SO")) {
@@ -45,3 +47,5 @@ export fn dynMain() callconv(.C) noreturn {
     _ = syscall1(231, 0);
     unreachable;
 }
+
+pub fn main() void {}

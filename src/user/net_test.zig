@@ -9,11 +9,11 @@ const SO_REUSEADDR: usize = 2;
 const SockAddrIn = extern struct {
     sin_family: u16 = AF_INET,
     sin_port: u16 = 0,
-    sin_addr: [4]u8 = .{ 127, 0, 0, 1 },
+    sin_addr: u32 = 0x0100007F,
     sin_zero: [8]u8 = [_]u8{0} ** 8,
 };
 
-export fn _start() callconv(.Naked) noreturn {
+pub export fn _start() callconv(.Naked) noreturn {
     asm volatile (
         \\ movq %rsp, %rdi
         \\ andq $-16, %rsp
@@ -95,12 +95,12 @@ fn runServer() noreturn {
     var addr = SockAddrIn{
         .sin_family = AF_INET,
         .sin_port = std.mem.nativeToBig(u16, 8080),
-        .sin_addr = .{ 127, 0, 0, 1 },
+        .sin_addr = 0x0100007F,
     };
     if (syscall3(49, @intCast(listen_fd), @intFromPtr(&addr), @sizeOf(SockAddrIn)) != 0) failExit(11);
     if (syscall2(50, @intCast(listen_fd), 4) != 0) failExit(12);
 
-    writeStdout("[TINUX_NET] TCP server listening on 127.0.0.1:8080...\n");
+    writeStdout("[TINUX_NET] Server listening on 127.0.0.1:8080\n");
 
     var peer_addr: SockAddrIn = undefined;
     var peer_len: u32 = @sizeOf(SockAddrIn);
@@ -136,7 +136,19 @@ fn runClient() noreturn {
 
     _ = syscall1(3, @intCast(sv[0]));
     _ = syscall1(3, @intCast(sv[1]));
-    writeStdout("[TINUX_NET] AF_UNIX socketpair bidirectional stream verified!\n");
+    writeStdout("[TINUX_NET] AF_UNIX socketpair IPC verified!\n");
+
+    // Validate ENOTSOCK on non-socket FD (console fd 1) and EBADF on unused FD
+    if (syscall2(50, 1, 4) != -88) failExit(27);
+    if (syscall2(50, 60, 4) != -9) failExit(28);
+
+    var pipe_fds: [2]i32 = .{ -1, -1 };
+    if (syscall2(293, @intFromPtr(&pipe_fds), 0) == 0) {
+        const pfd: usize = @intCast(pipe_fds[0]);
+        if (syscall2(50, pfd, 4) != -88) failExit(29);
+        _ = syscall1(3, pfd);
+        _ = syscall1(3, @intCast(pipe_fds[1]));
+    }
 
     // 2. Connect to TCP server at 127.0.0.1:8080
     const sock_fd = syscall3(41, AF_INET, SOCK_STREAM, 0);
@@ -145,11 +157,22 @@ fn runClient() noreturn {
     var srv_addr = SockAddrIn{
         .sin_family = AF_INET,
         .sin_port = std.mem.nativeToBig(u16, 8080),
-        .sin_addr = .{ 127, 0, 0, 1 },
+        .sin_addr = 0x0100007F,
     };
-    if (syscall3(42, @intCast(sock_fd), @intFromPtr(&srv_addr), @sizeOf(SockAddrIn)) != 0) failExit(24);
 
-    const ping = "PING_FROM_TINUX_CLIENT\n";
+    var connected = false;
+    var retries: usize = 0;
+    while (retries < 10) : (retries += 1) {
+        if (syscall3(42, @intCast(sock_fd), @intFromPtr(&srv_addr), @sizeOf(SockAddrIn)) == 0) {
+            connected = true;
+            break;
+        }
+        var req = [_]usize{ 0, 50_000_000 };
+        _ = syscall2(35, @intFromPtr(&req), 0);
+    }
+    if (!connected) failExit(24);
+
+    const ping = "PING_TINUX_SOCKET\n";
     if (syscall3(1, @intCast(sock_fd), @intFromPtr(ping.ptr), ping.len) != ping.len) failExit(25);
 
     var rx_buf: [64]u8 = undefined;
@@ -175,3 +198,5 @@ export fn netMain(initial_rsp: [*]const u64) callconv(.C) noreturn {
     }
     runClient();
 }
+
+pub fn main() void {}

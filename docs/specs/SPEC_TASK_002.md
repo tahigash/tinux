@@ -1,8 +1,8 @@
 # Tinux Implementation Specification: TASK-002
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
-> * **Architect (Structure & Harness):** Gemini 4 Argon
-> * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
-> * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
+> * **Architect (Structure & Harness):** AI System Architect
+> * **Auditor (Low-Level & ABI Contract):** AI Code Auditor
+> * **Target Builder:** Autonomous AI Builder Agent
 ---
 ## 0. Builder Agent Operating Rules
 You are the Implementation Builder. Implement the requirements adhering strictly to these rules:
@@ -40,7 +40,7 @@ You are the Implementation Builder. Implement the requirements adhering strictly
   * `src/mm/pmm.zig` (Create)
   * `src/main.zig` (Modify: run TASK-002 verification suite)
 ---
-## 3. Hardware & Low-Level Contract (Opus 5.5 Audited)
+## 3. Hardware & Low-Level Contract (AI Audited)
 ### 3.1 GDT Layout (Future `SYSCALL` / `SYSRET` Ready)
 To ensure compatibility with subsequent `SYSRET` instructions, user segment descriptors must follow kernel selectors in the order required by `IA32_STAR`:
 | Index | Selector | Segment Role | Descriptor Value (`u64`) |
@@ -425,6 +425,6 @@ If `zig build` or `./scripts/verify_qemu.sh TASK-002 5` fails three consecutive 
 ```diff
 [Code diff or relevant source snippet of failed component]
 ```
-## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
+## 4. Suspected Root Cause (For AI Architect / Auditor Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]
 ```

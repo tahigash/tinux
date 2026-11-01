@@ -7,7 +7,7 @@
     .asciz "Xen"
     .align 4
     .long _start32
-.section .text.boot, "ax", @progbits
+.section .boot.text, "ax", @progbits
 .code32
 .global _start32
 .extern kmain
@@ -30,13 +30,13 @@ _start32:
     addl $0x200000, %eax        /* Next 2 MiB physical frame */
     addl $8, %edi
     loop 1b
-    /* 2. Load CR3 with boot_pml4 physical address */
-    movl $boot_pml4, %eax
-    movl %eax, %cr3
-    /* 3. Enable PAE (Bit 5) + OSFXSR (Bit 9) + OSXMMEXCPT (Bit 10) in CR4 */
+    /* 2. Enable PAE (Bit 5) + OSFXSR (Bit 9) + OSXMMEXCPT (Bit 10) in CR4 */
     movl %cr4, %eax
     orl  $0x00000620, %eax
     movl %eax, %cr4
+    /* 3. Load CR3 with boot_pml4 physical address */
+    movl $boot_pml4, %eax
+    movl %eax, %cr3
     /* 4. Enable Long Mode (LME = Bit 8) in IA32_EFER MSR (0xC0000080) */
     movl $0xC0000080, %ecx
     rdmsr
@@ -77,7 +77,7 @@ boot_gdt_end:
 boot_gdtr:
     .word boot_gdt_end - boot_gdt - 1
     .quad boot_gdt
-.section .bss
+.section .boot.bss, "aw", @nobits
 .align 4096
 boot_pml4:
     .skip 4096

@@ -42,7 +42,8 @@ pub fn unpackInitramfs(archive: []const u8) usize {
 
         const name_start = offset + @sizeOf(CpioNewcHeader);
         if (name_start + namesize > archive.len) break;
-        const raw_name = archive[name_start .. name_start + namesize - 1]; // Exclude NUL
+        const name_slice = archive[name_start .. name_start + namesize];
+        const raw_name = std.mem.sliceTo(name_slice, 0);
         if (std.mem.eql(u8, raw_name, "TRAILER!!!")) break;
 
         const data_start = std.mem.alignForward(usize, name_start + namesize, 4);

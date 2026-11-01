@@ -1,8 +1,8 @@
 # Tinux Implementation Specification: TASK-009
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
-> * **Architect (Structure & Harness):** Gemini 4 Argon
-> * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
-> * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
+> * **Architect (Structure & Harness):** AI System Architect
+> * **Auditor (Low-Level & ABI Contract):** AI Code Auditor
+> * **Target Builder:** Autonomous AI Builder Agent
 ---
 ## 0. Builder Agent Operating Rules
 You are the Implementation Builder. Implement the requirements adhering strictly to these rules:
@@ -35,7 +35,7 @@ You are the Implementation Builder. Implement the requirements adhering strictly
   * `src/main.zig` (Modify: initialize VFS and run TASK-009 test)
   * `scripts/verify_qemu.sh` (Modify: provide the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
 ---
-## 3. Directory & File Manipulation Contract (Opus 5.5 Audited)
+## 3. Directory & File Manipulation Contract (AI Audited)
 ### 3.1 `sys_getdents64` Record Format Contract
 The Linux x86_64 `sys_getdents64` system call fills the user buffer with variable-length `linux_dirent64` records:
 ```text
@@ -196,6 +196,6 @@ If `zig build` or `./scripts/verify_qemu.sh TASK-009 5` fails three consecutive 
 ```diff
 [Relevant code diff for src/fs/vfs.zig or src/syscall/dispatch.zig]
 ```
-## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
+## 4. Suspected Root Cause (For AI Architect / Auditor Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]
 ```

@@ -1,12 +1,12 @@
 # Tinux Implementation Specification: TASK-014
 
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
-> * **Architect (Structure & Harness):** Gemini 4 Argon
-> * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
-> * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
+> * **Architect (Structure & Harness):** AI System Architect
+> * **Auditor (Low-Level & ABI Contract):** AI Code Auditor
+> * **Target Builder:** Autonomous AI Builder Agent
 > * **Prerequisite:** `TASK-013` Passed (`./scripts/verify_qemu.sh TASK-013 10` == Exit Code 0)
 ---
-## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
+## 0. Builder Agent Operating Rules (For Autonomous AI Builder)
 You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
    Do not alter the `sys_clone` register argument ordering, 12-byte `LinuxEpollEvent` layout, or physical address wait queues for futex operations.
@@ -42,7 +42,7 @@ Use modern Zig syntax (0.13 / 0.14 / 0.15+) exclusively to prevent compilation e
   * `src/main.zig` (Modify: call `epoll.init()` and update test markers to `TASK-014`)
   * `scripts/verify_qemu.sh` (Modify: compile `/bin/thread_epoll_test`, include in `initramfs.cpio`, and execute via `/bin/sh`)
 ---
-## 3. Threading, Futex & Epoll ABI Contract (Opus 5.5 Audited)
+## 3. Threading, Futex & Epoll ABI Contract (AI Audited)
 ### 3.1 x86_64 `sys_clone` (Syscall 56) Raw Argument Order & Thread Flags
 The raw x86_64 Linux kernel syscall ABI for `clone` passes arguments in specific registers:
 * **`rdi` (Arg1):** `clone_flags: usize`
@@ -420,6 +420,6 @@ If `zig build` or `./scripts/verify_qemu.sh TASK-014 10` fails 3 consecutive tim
 ```diff
 [Relevant code diff for src/proc/task.zig, src/proc/futex.zig, src/fs/epoll.zig, src/syscall/dispatch.zig]
 ```
-## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
+## 4. Suspected Root Cause (For AI Architect / Auditor Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]
 ```

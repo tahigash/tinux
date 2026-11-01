@@ -32,9 +32,20 @@ pub const Errno = error{
     ERANGE,
     ENOSYS,
     ENOTEMPTY,
-    ECONNREFUSED,
+    ENOTSOCK,
+    EDESTADDRREQ,
+    EOPNOTSUPP,
+    EAFNOSUPPORT,
     EADDRINUSE,
+    EADDRNOTAVAIL,
+    ENETUNREACH,
+    ECONNABORTED,
+    ECONNRESET,
+    ENOBUFS,
+    EISCONN,
+    ENOTCONN,
     ETIMEDOUT,
+    ECONNREFUSED,
     OutOfMemory,
 };
 
@@ -70,9 +81,20 @@ pub const ErrnoCode = enum(u16) {
     ERANGE = 34,
     ENOSYS = 38,
     ENOTEMPTY = 39,
-    ECONNREFUSED = 111,
+    ENOTSOCK = 88,
+    EDESTADDRREQ = 89,
+    EOPNOTSUPP = 95,
+    EAFNOSUPPORT = 97,
     EADDRINUSE = 98,
+    EADDRNOTAVAIL = 99,
+    ENETUNREACH = 101,
+    ECONNABORTED = 103,
+    ECONNRESET = 104,
+    ENOBUFS = 105,
+    EISCONN = 106,
+    ENOTCONN = 107,
     ETIMEDOUT = 110,
+    ECONNREFUSED = 111,
 };
 
 pub inline fn toReturn(err: anytype) isize {
@@ -109,9 +131,20 @@ pub inline fn toReturn(err: anytype) isize {
         if (err == error.ERANGE) return -34;
         if (err == error.ENOSYS) return -38;
         if (err == error.ENOTEMPTY) return -39;
-        if (err == error.ECONNREFUSED) return -111;
+        if (err == error.ENOTSOCK) return -88;
+        if (err == error.EDESTADDRREQ) return -89;
+        if (err == error.EOPNOTSUPP) return -95;
+        if (err == error.EAFNOSUPPORT) return -97;
         if (err == error.EADDRINUSE) return -98;
+        if (err == error.EADDRNOTAVAIL) return -99;
+        if (err == error.ENETUNREACH) return -101;
+        if (err == error.ECONNABORTED) return -103;
+        if (err == error.ECONNRESET) return -104;
+        if (err == error.ENOBUFS) return -105;
+        if (err == error.EISCONN) return -106;
+        if (err == error.ENOTCONN) return -107;
         if (err == error.ETIMEDOUT) return -110;
+        if (err == error.ECONNREFUSED) return -111;
         return -22;
     } else {
         switch (err) {
@@ -146,9 +179,20 @@ pub inline fn toReturn(err: anytype) isize {
             .ERANGE => return -34,
             .ENOSYS => return -38,
             .ENOTEMPTY => return -39,
-            .ECONNREFUSED => return -111,
+            .ENOTSOCK => return -88,
+            .EDESTADDRREQ => return -89,
+            .EOPNOTSUPP => return -95,
+            .EAFNOSUPPORT => return -97,
             .EADDRINUSE => return -98,
+            .EADDRNOTAVAIL => return -99,
+            .ENETUNREACH => return -101,
+            .ECONNABORTED => return -103,
+            .ECONNRESET => return -104,
+            .ENOBUFS => return -105,
+            .EISCONN => return -106,
+            .ENOTCONN => return -107,
             .ETIMEDOUT => return -110,
+            .ECONNREFUSED => return -111,
             else => return -22,
         }
     }

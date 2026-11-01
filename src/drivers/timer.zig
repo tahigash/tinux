@@ -58,12 +58,19 @@ pub fn sendEoi(irq: u8) void {
 }
 
 pub fn onTick() void {
-    const now = @atomicRmw(u64, &ticks, .Add, 1, .seq_cst) + 1;
+    _ = @atomicRmw(u64, &ticks, .Add, 1, .seq_cst);
+    const now = getTicks();
     // Poll UART in case an edge was missed
-    const serial = @import("serial.zig");
-    serial.pollRx();
+    const tty = @import("tty.zig");
+    tty.pollSerialRx();
 
-    task.wakeSleepingTasks(now);
+    const virtio_net = @import("virtio_net.zig");
+    if (virtio_net.isReady()) {
+        virtio_net.pollRx();
+    }
+
+    task.checkAlarmTimers(now);
+    task.tickSleepWaiters();
     sendEoi(0);
 }
 

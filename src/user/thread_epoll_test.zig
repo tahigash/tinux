@@ -15,7 +15,7 @@ const LinuxEpollEvent = extern struct {
     events: u32 align(1),
     data: u64 align(1),
 };
-export fn _start() callconv(.Naked) noreturn {
+pub export fn _start() callconv(.Naked) noreturn {
     asm volatile (
         \\ andq $-16, %rsp
         \\ call mainThread
@@ -150,3 +150,6 @@ export fn mainThread() callconv(.C) noreturn {
     _ = syscall1(231, 0); // sys_exit_group(0)
     unreachable;
 }
+
+// Satisfies standard library root.main check when compiled for Linux targets
+pub fn main() void {}

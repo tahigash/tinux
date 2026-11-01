@@ -58,6 +58,9 @@ syscallEntry:
 .align 16
 enterUserMode:
     cli
+    movw $0x1B, %ax
+    movw %ax, %ds
+    movw %ax, %es
     pushq $0x1B                    /* User SS (0x18 | RPL 3) */
     pushq %rsi                     /* User RSP */
     pushq $0x202                   /* RFLAGS (IF=1, Reserved Bit 1=1) */
