@@ -148,7 +148,12 @@ pub const Task = struct {
             switch (e.kind) {
                 .PIPE_READ => pipe_mod.closeReader(e.node_idx),
                 .PIPE_WRITE => pipe_mod.closeWriter(e.node_idx),
-                .SOCKET => sock_mod.close(e.node_idx),
+                .SOCKET => {
+                    const s_idx = if (e.sock_idx != 0) e.sock_idx else e.node_idx;
+                    if (sock_mod.close(s_idx)) |peer_idx| {
+                        wakeSocketReadWaiters(peer_idx);
+                    }
+                },
                 else => {},
             }
             e.* = .{};
@@ -163,7 +168,12 @@ pub const Task = struct {
                 switch (e.kind) {
                     .PIPE_READ => pipe_mod.closeReader(e.node_idx),
                     .PIPE_WRITE => pipe_mod.closeWriter(e.node_idx),
-                    .SOCKET => sock_mod.close(e.node_idx),
+                    .SOCKET => {
+                        const s_idx = if (e.sock_idx != 0) e.sock_idx else e.node_idx;
+                        if (sock_mod.close(s_idx)) |peer_idx| {
+                            wakeSocketReadWaiters(peer_idx);
+                        }
+                    },
                     else => {},
                 }
                 e.* = .{};
@@ -282,7 +292,8 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
         } else if (e.kind == .PIPE_WRITE) {
             pipe_mod.retainWriter(e.node_idx);
         } else if (e.kind == .SOCKET) {
-            sock_mod.retain(e.node_idx);
+            const s_idx = if (e.sock_idx != 0) e.sock_idx else e.node_idx;
+            sock_mod.retain(s_idx);
         }
     }
 

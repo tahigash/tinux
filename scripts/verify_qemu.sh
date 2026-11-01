@@ -321,19 +321,28 @@ for cmd in commands:
 '
             ;;
         13)
-            cat << 'EOF'
-echo "[TINUX_SH] Starting background TCP server (/bin/net_test server &)..."
-/bin/net_test server &
-SRV_PID=$!
-/bin/sleep 1
-echo "[TINUX_SH] Inspecting /proc/net/tcp:"
-/bin/cat /proc/net/tcp
-echo "[TINUX_SH] Running TCP & UNIX socket client (/bin/net_test client)..."
-/bin/net_test client
-wait $SRV_PID 2>/dev/null
-echo "[TINUX_SOCKET] Multi-process TCP loopback (127.0.0.1:8080) & AF_UNIX IPC verified!"
-exit 0
-EOF
+            "$PYTHON_BIN" -c '
+import sys, time
+commands = [
+    "echo \"[TINUX_SH] Starting background TCP server (/bin/net_test server &)...\"\n",
+    "/bin/net_test server &\n",
+    "SRV_PID=$!\n",
+    "/bin/sleep 1\n",
+    "echo \"[TINUX_SH] Inspecting /proc/net/tcp:\"\n",
+    "/bin/cat /proc/net/tcp\n",
+    "echo \"[TINUX_SH] Running TCP & UNIX socket client (/bin/net_test client)...\"\n",
+    "/bin/net_test client\n",
+    "wait $SRV_PID 2>/dev/null\n",
+    "echo \"[TINUX_SOCKET] Multi-process TCP loopback (127.0.0.1:8080) & AF_UNIX IPC verified!\"\n",
+    "exit 0\n"
+]
+for cmd in commands:
+    for ch in cmd:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(0.001)
+    time.sleep(0.05)
+'
             ;;
         14)
             cat << 'EOF'

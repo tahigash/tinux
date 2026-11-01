@@ -393,6 +393,8 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
     const a2 = frame.rsi;
     const a3 = frame.rdx;
     const a4 = frame.r10;
+    const a5 = frame.r8;
+    const a6 = frame.r9;
 
     var res: isize = 0;
     var do_block: bool = false;
@@ -458,14 +460,19 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                         }
                     },
                     .SOCKET => {
-                        const r = socket.readStream(entry.node_idx, dst);
-                        switch (r.status) {
-                            .bytes => res = @intCast(r.n),
+                        const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
+                        const r = socket.read(s_idx, dst);
+                        switch (r) {
+                            .bytes => |n| res = @intCast(n),
                             .eof => res = 0,
                             .would_block => {
-                                cur_task.state = .WAITING_SOCK_READ;
-                                cur_task.wait_sock_idx = entry.node_idx;
-                                do_block = true;
+                                if ((entry.flags & vfs.O_NONBLOCK) != 0 or socket.sockets[s_idx].nonblock) {
+                                    res = errno_mod.toReturn(.EAGAIN);
+                                } else {
+                                    cur_task.state = .WAITING_SOCK_READ;
+                                    cur_task.wait_sock_idx = s_idx;
+                                    do_block = true;
+                                }
                             },
                         }
                     },
@@ -518,10 +525,14 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                         }
                     },
                     .SOCKET => {
-                        const w = socket.writeStream(entry.node_idx, src) catch |err| {
+                        const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
+                        const w = socket.write(s_idx, src) catch |err| {
                             res = errno_mod.toReturn(err);
                             break :blk;
                         };
+                        if (socket.sockets[s_idx].peer_idx) |p_idx| {
+                            task.wakeSocketReadWaiters(p_idx);
+                        }
                         res = @intCast(w);
                     },
                     else => res = errno_mod.toReturn(.EBADF),
@@ -561,7 +572,12 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 switch (entry.kind) {
                     .PIPE_READ => pipe_mod.closeReader(entry.node_idx),
                     .PIPE_WRITE => pipe_mod.closeWriter(entry.node_idx),
-                    .SOCKET => socket.close(entry.node_idx),
+                    .SOCKET => {
+                        const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
+                        if (socket.close(s_idx)) |peer_idx| {
+                            task.wakeSocketReadWaiters(peer_idx);
+                        }
+                    },
                     else => {},
                 }
                 entry.* = .{};
@@ -946,27 +962,30 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
 
         SYS_SOCKET => {
             const domain: u16 = @truncate(a1);
-            const sock_type: u16 = @truncate(a2 & 0xFF);
-            const proto: u16 = @truncate(a3);
+            const base_type: u32 = @truncate(a2 & 0xFF);
+            const flags: u32 = @truncate(a2 & ~@as(u64, 0xFF));
+            const is_nonblock = (flags & socket.SOCK_NONBLOCK) != 0;
+            const is_cloexec = (flags & socket.SOCK_CLOEXEC) != 0;
             if (domain != socket.AF_UNIX and domain != socket.AF_INET) {
+                res = errno_mod.toReturn(.EAFNOSUPPORT);
+            } else if (base_type != socket.SOCK_STREAM and base_type != socket.SOCK_DGRAM) {
                 res = errno_mod.toReturn(.EINVAL);
             } else {
-                const s_idx = socket.alloc(domain, sock_type, proto) orelse {
-                    res = errno_mod.toReturn(.ENFILE);
+                const s_idx = socket.alloc(domain, base_type, is_nonblock) orelse {
+                    res = errno_mod.toReturn(.ENOBUFS);
                     break :blk;
                 };
-                var fd_slot: ?usize = null;
-                for (&cur_task.fd_table, 0..) |*e, i| {
-                    if (e.kind == .UNUSED) {
-                        fd_slot = i;
-                        break;
-                    }
-                }
-                if (fd_slot) |fd| {
-                    cur_task.fd_table[fd] = .{ .kind = .SOCKET, .node_idx = s_idx };
+                if (vfs.allocFd(&cur_task.fd_table, 0)) |fd| {
+                    cur_task.fd_table[fd] = .{
+                        .kind = .SOCKET,
+                        .node_idx = s_idx,
+                        .sock_idx = s_idx,
+                        .cloexec = is_cloexec,
+                        .flags = if (is_nonblock) vfs.O_NONBLOCK else 0,
+                    };
                     res = @intCast(fd);
                 } else {
-                    socket.close(s_idx);
+                    _ = socket.close(s_idx);
                     res = errno_mod.toReturn(.EMFILE);
                 }
             }
@@ -976,29 +995,54 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             const fd = a1;
             const addr_ptr = a2;
             const addr_len = a3;
-            _ = addr_len;
-            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind != .SOCKET) {
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
-            } else if (!validateUserBuffer(addr_ptr, @sizeOf(socket.SockAddrIn))) {
-                res = errno_mod.toReturn(.EFAULT);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
             } else {
-                const sin = @as(*const socket.SockAddrIn, @ptrFromInt(addr_ptr));
-                const host_port = std.mem.bigToNative(u16, sin.sin_port);
-                socket.bind(cur_task.fd_table[fd].node_idx, host_port) catch |err| {
-                    res = errno_mod.toReturn(err);
-                    break :blk;
-                };
-                res = 0;
+                const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
+                const dom = socket.sockets[s_idx].domain;
+                if (dom == socket.AF_INET) {
+                    if (!validateUserBuffer(addr_ptr, @sizeOf(socket.SockAddrIn)) or addr_len < @sizeOf(socket.SockAddrIn)) {
+                        res = errno_mod.toReturn(.EFAULT);
+                    } else {
+                        const sin = @as(*align(1) const socket.SockAddrIn, @ptrFromInt(addr_ptr)).*;
+                        const host_port = std.mem.bigToNative(u16, sin.sin_port);
+                        socket.bindInet(s_idx, host_port) catch |err| {
+                            res = errno_mod.toReturn(err);
+                            break :blk;
+                        };
+                        res = 0;
+                    }
+                } else if (dom == socket.AF_UNIX) {
+                    if (!validateUserBuffer(addr_ptr, 2) or addr_len < 2) {
+                        res = errno_mod.toReturn(.EFAULT);
+                    } else {
+                        const sun = @as(*align(1) const socket.SockAddrUn, @ptrFromInt(addr_ptr)).*;
+                        const max_p = @min(addr_len - 2, 108);
+                        var p_len: usize = 0;
+                        while (p_len < max_p and sun.sun_path[p_len] != 0) : (p_len += 1) {}
+                        socket.bindUnix(s_idx, sun.sun_path[0..p_len]) catch |err| {
+                            res = errno_mod.toReturn(err);
+                            break :blk;
+                        };
+                        res = 0;
+                    }
+                } else {
+                    res = errno_mod.toReturn(.EINVAL);
+                }
             }
         },
 
         SYS_LISTEN => {
             const fd = a1;
-            const backlog = a2;
-            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind != .SOCKET) {
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
             } else {
-                socket.listen(cur_task.fd_table[fd].node_idx, backlog) catch |err| {
+                const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
+                socket.listen(s_idx) catch |err| {
                     res = errno_mod.toReturn(err);
                     break :blk;
                 };
@@ -1010,31 +1054,70 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             const fd = a1;
             const addr_ptr = a2;
             const addr_len_ptr = a3;
-            _ = addr_ptr;
-            _ = addr_len_ptr;
-            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind != .SOCKET) {
+            const flags: u32 = if (num == SYS_ACCEPT4) @truncate(a4) else 0;
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
             } else {
-                const l_idx = cur_task.fd_table[fd].node_idx;
-                if (socket.popAcceptQueue(l_idx)) |conn_idx| {
-                    var new_fd: ?usize = null;
-                    for (&cur_task.fd_table, 0..) |*e, i| {
-                        if (e.kind == .UNUSED) {
-                            new_fd = i;
-                            break;
+                const l_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
+                if (socket.sockets[l_idx].state != .LISTENING) {
+                    res = errno_mod.toReturn(.EINVAL);
+                    break :blk;
+                }
+                const is_nonblock = (flags & socket.SOCK_NONBLOCK) != 0 or socket.sockets[l_idx].nonblock or (cur_task.fd_table[fd].flags & vfs.O_NONBLOCK) != 0;
+                const is_cloexec = (flags & socket.SOCK_CLOEXEC) != 0;
+
+                if (socket.popAccept(l_idx)) |conn_idx| {
+                    if (vfs.allocFd(&cur_task.fd_table, 0)) |new_fd| {
+                        cur_task.fd_table[new_fd] = .{
+                            .kind = .SOCKET,
+                            .node_idx = conn_idx,
+                            .sock_idx = conn_idx,
+                            .cloexec = is_cloexec,
+                            .flags = if (is_nonblock) vfs.O_NONBLOCK else 0,
+                        };
+                        if (is_nonblock) {
+                            socket.sockets[conn_idx].nonblock = true;
                         }
-                    }
-                    if (new_fd) |nfd| {
-                        cur_task.fd_table[nfd] = .{ .kind = .SOCKET, .node_idx = conn_idx };
-                        res = @intCast(nfd);
+
+                        if (addr_ptr != 0 and addr_len_ptr != 0) {
+                            if (socket.sockets[conn_idx].domain == socket.AF_INET) {
+                                if (validateUserBuffer(addr_ptr, @sizeOf(socket.SockAddrIn)) and validateUserBuffer(addr_len_ptr, 4)) {
+                                    const peer_port = if (socket.sockets[conn_idx].peer_idx) |p| socket.sockets[p].bound_port else 0;
+                                    const sin_out = socket.SockAddrIn{
+                                        .sin_family = socket.AF_INET,
+                                        .sin_port = std.mem.nativeToBig(u16, peer_port),
+                                        .sin_addr = 0x0100007F,
+                                    };
+                                    @as(*socket.SockAddrIn, @ptrFromInt(addr_ptr)).* = sin_out;
+                                    @as(*u32, @ptrFromInt(addr_len_ptr)).* = @sizeOf(socket.SockAddrIn);
+                                }
+                            } else if (socket.sockets[conn_idx].domain == socket.AF_UNIX) {
+                                if (validateUserBuffer(addr_ptr, @sizeOf(socket.SockAddrUn)) and validateUserBuffer(addr_len_ptr, 4)) {
+                                    var sun_out = socket.SockAddrUn{ .sun_family = socket.AF_UNIX };
+                                    if (socket.sockets[conn_idx].peer_idx) |p| {
+                                        const p_len = socket.sockets[p].bound_path_len;
+                                        @memcpy(sun_out.sun_path[0..p_len], socket.sockets[p].bound_path[0..p_len]);
+                                    }
+                                    @as(*socket.SockAddrUn, @ptrFromInt(addr_ptr)).* = sun_out;
+                                    @as(*u32, @ptrFromInt(addr_len_ptr)).* = @sizeOf(socket.SockAddrUn);
+                                }
+                            }
+                        }
+                        res = @intCast(new_fd);
                     } else {
-                        socket.close(conn_idx);
+                        _ = socket.close(conn_idx);
                         res = errno_mod.toReturn(.EMFILE);
                     }
                 } else {
-                    cur_task.state = .WAITING_SOCK_ACCEPT;
-                    cur_task.wait_sock_idx = l_idx;
-                    do_block = true;
+                    if (is_nonblock) {
+                        res = errno_mod.toReturn(.EAGAIN);
+                    } else {
+                        cur_task.state = .WAITING_SOCK_ACCEPT;
+                        cur_task.wait_sock_idx = l_idx;
+                        do_block = true;
+                    }
                 }
             }
         },
@@ -1042,18 +1125,45 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         SYS_CONNECT => {
             const fd = a1;
             const addr_ptr = a2;
-            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind != .SOCKET) {
+            const addr_len = a3;
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
-            } else if (!validateUserBuffer(addr_ptr, @sizeOf(socket.SockAddrIn))) {
-                res = errno_mod.toReturn(.EFAULT);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
             } else {
-                const sin = @as(*const socket.SockAddrIn, @ptrFromInt(addr_ptr));
-                const target_port = std.mem.bigToNative(u16, sin.sin_port);
-                socket.connectLoopback(cur_task.fd_table[fd].node_idx, target_port) catch |err| {
-                    res = errno_mod.toReturn(err);
-                    break :blk;
-                };
-                res = 0;
+                const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
+                const dom = socket.sockets[s_idx].domain;
+                if (dom == socket.AF_INET) {
+                    if (!validateUserBuffer(addr_ptr, @sizeOf(socket.SockAddrIn)) or addr_len < @sizeOf(socket.SockAddrIn)) {
+                        res = errno_mod.toReturn(.EFAULT);
+                    } else {
+                        const sin = @as(*align(1) const socket.SockAddrIn, @ptrFromInt(addr_ptr)).*;
+                        const target_port = std.mem.bigToNative(u16, sin.sin_port);
+                        const l_idx = socket.connectInet(s_idx, target_port) catch |err| {
+                            res = errno_mod.toReturn(err);
+                            break :blk;
+                        };
+                        task.wakeSocketAcceptWaiters(l_idx);
+                        res = 0;
+                    }
+                } else if (dom == socket.AF_UNIX) {
+                    if (!validateUserBuffer(addr_ptr, 2) or addr_len < 2) {
+                        res = errno_mod.toReturn(.EFAULT);
+                    } else {
+                        const sun = @as(*align(1) const socket.SockAddrUn, @ptrFromInt(addr_ptr)).*;
+                        const max_p = @min(addr_len - 2, 108);
+                        var p_len: usize = 0;
+                        while (p_len < max_p and sun.sun_path[p_len] != 0) : (p_len += 1) {}
+                        const l_idx = socket.connectUnix(s_idx, sun.sun_path[0..p_len]) catch |err| {
+                            res = errno_mod.toReturn(err);
+                            break :blk;
+                        };
+                        task.wakeSocketAcceptWaiters(l_idx);
+                        res = 0;
+                    }
+                } else {
+                    res = errno_mod.toReturn(.EINVAL);
+                }
             }
         },
 
@@ -1061,16 +1171,24 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             const fd = a1;
             const buf_ptr = a2;
             const len = a3;
-            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind != .SOCKET) {
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
+            } else if (len == 0) {
+                res = 0;
             } else if (!validateUserBuffer(buf_ptr, len)) {
                 res = errno_mod.toReturn(.EFAULT);
             } else {
+                const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
                 const src = @as([*]const u8, @ptrFromInt(buf_ptr))[0..len];
-                const w = socket.writeStream(cur_task.fd_table[fd].node_idx, src) catch |err| {
+                const w = socket.write(s_idx, src) catch |err| {
                     res = errno_mod.toReturn(err);
                     break :blk;
                 };
+                if (socket.sockets[s_idx].peer_idx) |p_idx| {
+                    task.wakeSocketReadWaiters(p_idx);
+                }
                 res = @intCast(w);
             }
         },
@@ -1079,26 +1197,207 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             const fd = a1;
             const buf_ptr = a2;
             const len = a3;
-            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind != .SOCKET) {
+            const src_addr_ptr = a5;
+            const addrlen_ptr = a6;
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
+            } else if (len == 0) {
+                res = 0;
             } else if (!validateUserBuffer(buf_ptr, len)) {
                 res = errno_mod.toReturn(.EFAULT);
             } else {
+                const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
                 const dst = @as([*]u8, @ptrFromInt(buf_ptr))[0..len];
-                const r = socket.readStream(cur_task.fd_table[fd].node_idx, dst);
-                switch (r.status) {
-                    .bytes => res = @intCast(r.n),
+                const r = socket.read(s_idx, dst);
+                switch (r) {
+                    .bytes => |n| {
+                        if (src_addr_ptr != 0 and addrlen_ptr != 0) {
+                            if (socket.sockets[s_idx].domain == socket.AF_INET) {
+                                if (validateUserBuffer(src_addr_ptr, @sizeOf(socket.SockAddrIn)) and validateUserBuffer(addrlen_ptr, 4)) {
+                                    const peer_port = if (socket.sockets[s_idx].peer_idx) |p| socket.sockets[p].bound_port else 0;
+                                    const sin_out = socket.SockAddrIn{
+                                        .sin_family = socket.AF_INET,
+                                        .sin_port = std.mem.nativeToBig(u16, peer_port),
+                                        .sin_addr = 0x0100007F,
+                                    };
+                                    @as(*socket.SockAddrIn, @ptrFromInt(src_addr_ptr)).* = sin_out;
+                                    @as(*u32, @ptrFromInt(addrlen_ptr)).* = @sizeOf(socket.SockAddrIn);
+                                }
+                            }
+                        }
+                        res = @intCast(n);
+                    },
                     .eof => res = 0,
                     .would_block => {
-                        cur_task.state = .WAITING_SOCK_READ;
-                        cur_task.wait_sock_idx = cur_task.fd_table[fd].node_idx;
-                        do_block = true;
+                        if (socket.sockets[s_idx].nonblock or (cur_task.fd_table[fd].flags & vfs.O_NONBLOCK) != 0) {
+                            res = errno_mod.toReturn(.EAGAIN);
+                        } else {
+                            cur_task.state = .WAITING_SOCK_READ;
+                            cur_task.wait_sock_idx = s_idx;
+                            do_block = true;
+                        }
                     },
                 }
             }
         },
 
-        SYS_SHUTDOWN, SYS_SETSOCKOPT, SYS_GETSOCKOPT => res = 0,
+        SYS_SHUTDOWN => {
+            const fd = a1;
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
+                res = errno_mod.toReturn(.EBADF);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
+            } else {
+                const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
+                if (socket.sockets[s_idx].state != .CONNECTED or socket.sockets[s_idx].peer_idx == null) {
+                    res = errno_mod.toReturn(.ENOTCONN);
+                } else {
+                    const p_idx = socket.sockets[s_idx].peer_idx.?;
+                    if (p_idx < socket.MAX_SOCKETS and socket.sockets[p_idx].in_use) {
+                        socket.sockets[p_idx].peer_closed = true;
+                        task.wakeSocketReadWaiters(p_idx);
+                    }
+                    res = 0;
+                }
+            }
+        },
+
+        SYS_GETSOCKNAME => {
+            const fd = a1;
+            const addr_ptr = a2;
+            const addr_len_ptr = a3;
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
+                res = errno_mod.toReturn(.EBADF);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
+            } else if (!validateUserBuffer(addr_ptr, 16) or !validateUserBuffer(addr_len_ptr, 4)) {
+                res = errno_mod.toReturn(.EFAULT);
+            } else {
+                const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
+                const dom = socket.sockets[s_idx].domain;
+                if (dom == socket.AF_INET) {
+                    const sin = socket.SockAddrIn{
+                        .sin_family = socket.AF_INET,
+                        .sin_port = std.mem.nativeToBig(u16, socket.sockets[s_idx].bound_port),
+                        .sin_addr = 0x0100007F,
+                    };
+                    @as(*socket.SockAddrIn, @ptrFromInt(addr_ptr)).* = sin;
+                    @as(*u32, @ptrFromInt(addr_len_ptr)).* = @sizeOf(socket.SockAddrIn);
+                    res = 0;
+                } else if (dom == socket.AF_UNIX) {
+                    var sun = socket.SockAddrUn{ .sun_family = socket.AF_UNIX };
+                    const p_len = socket.sockets[s_idx].bound_path_len;
+                    @memcpy(sun.sun_path[0..p_len], socket.sockets[s_idx].bound_path[0..p_len]);
+                    @as(*socket.SockAddrUn, @ptrFromInt(addr_ptr)).* = sun;
+                    @as(*u32, @ptrFromInt(addr_len_ptr)).* = @sizeOf(socket.SockAddrUn);
+                    res = 0;
+                } else {
+                    res = errno_mod.toReturn(.EINVAL);
+                }
+            }
+        },
+
+        SYS_GETPEERNAME => {
+            const fd = a1;
+            const addr_ptr = a2;
+            const addr_len_ptr = a3;
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
+                res = errno_mod.toReturn(.EBADF);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
+            } else {
+                const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
+                if (socket.sockets[s_idx].state != .CONNECTED or socket.sockets[s_idx].peer_idx == null) {
+                    res = errno_mod.toReturn(.ENOTCONN);
+                } else if (!validateUserBuffer(addr_ptr, 16) or !validateUserBuffer(addr_len_ptr, 4)) {
+                    res = errno_mod.toReturn(.EFAULT);
+                } else {
+                    const p_idx = socket.sockets[s_idx].peer_idx.?;
+                    const dom = socket.sockets[s_idx].domain;
+                    if (dom == socket.AF_INET) {
+                        const sin = socket.SockAddrIn{
+                            .sin_family = socket.AF_INET,
+                            .sin_port = std.mem.nativeToBig(u16, socket.sockets[p_idx].bound_port),
+                            .sin_addr = 0x0100007F,
+                        };
+                        @as(*socket.SockAddrIn, @ptrFromInt(addr_ptr)).* = sin;
+                        @as(*u32, @ptrFromInt(addr_len_ptr)).* = @sizeOf(socket.SockAddrIn);
+                        res = 0;
+                    } else if (dom == socket.AF_UNIX) {
+                        var sun = socket.SockAddrUn{ .sun_family = socket.AF_UNIX };
+                        const p_len = socket.sockets[p_idx].bound_path_len;
+                        @memcpy(sun.sun_path[0..p_len], socket.sockets[p_idx].bound_path[0..p_len]);
+                        @as(*socket.SockAddrUn, @ptrFromInt(addr_ptr)).* = sun;
+                        @as(*u32, @ptrFromInt(addr_len_ptr)).* = @sizeOf(socket.SockAddrUn);
+                        res = 0;
+                    } else {
+                        res = errno_mod.toReturn(.EINVAL);
+                    }
+                }
+            }
+        },
+
+        SYS_SOCKETPAIR => {
+            const domain: u16 = @truncate(a1);
+            const base_type: u32 = @truncate(a2 & 0xFF);
+            const flags: u32 = @truncate(a2 & ~@as(u64, 0xFF));
+            const sv_ptr = a4;
+            const is_nonblock = (flags & socket.SOCK_NONBLOCK) != 0;
+            const is_cloexec = (flags & socket.SOCK_CLOEXEC) != 0;
+
+            if (domain != socket.AF_UNIX) {
+                res = errno_mod.toReturn(.EOPNOTSUPP);
+            } else if (!validateUserBuffer(sv_ptr, 8)) {
+                res = errno_mod.toReturn(.EFAULT);
+            } else {
+                const pair = socket.socketpair(domain, base_type, is_nonblock) catch |err| {
+                    res = errno_mod.toReturn(err);
+                    break :blk;
+                };
+                const fd0 = vfs.allocFd(&cur_task.fd_table, 0) orelse {
+                    _ = socket.close(pair[0]);
+                    _ = socket.close(pair[1]);
+                    res = errno_mod.toReturn(.EMFILE);
+                    break :blk;
+                };
+                cur_task.fd_table[fd0] = .{
+                    .kind = .SOCKET,
+                    .node_idx = pair[0],
+                    .sock_idx = pair[0],
+                    .cloexec = is_cloexec,
+                    .flags = if (is_nonblock) vfs.O_NONBLOCK else 0,
+                };
+                const fd1 = vfs.allocFd(&cur_task.fd_table, fd0 + 1) orelse {
+                    cur_task.fd_table[fd0] = .{};
+                    _ = socket.close(pair[0]);
+                    _ = socket.close(pair[1]);
+                    res = errno_mod.toReturn(.EMFILE);
+                    break :blk;
+                };
+                cur_task.fd_table[fd1] = .{
+                    .kind = .SOCKET,
+                    .node_idx = pair[1],
+                    .sock_idx = pair[1],
+                    .cloexec = is_cloexec,
+                    .flags = if (is_nonblock) vfs.O_NONBLOCK else 0,
+                };
+                @as(*[2]i32, @ptrFromInt(sv_ptr)).* = [2]i32{ @intCast(fd0), @intCast(fd1) };
+                res = 0;
+            }
+        },
+
+        SYS_SETSOCKOPT, SYS_GETSOCKOPT => {
+            const fd = a1;
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
+                res = errno_mod.toReturn(.EBADF);
+            } else if (cur_task.fd_table[fd].kind != .SOCKET) {
+                res = errno_mod.toReturn(.ENOTSOCK);
+            } else {
+                res = 0;
+            }
+        },
 
         SYS_FORK, SYS_VFORK => {
             if (task.forkCurrentTask(frame)) |child_idx| {
@@ -1939,8 +2238,13 @@ fn handleReadDirect(fd: usize, buf_ptr: usize, count: usize) isize {
             return @intCast(r.n);
         },
         .SOCKET => {
-            const r = socket.readStream(entry.node_idx, dst);
-            return @intCast(r.n);
+            const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
+            const r = socket.read(s_idx, dst);
+            return switch (r) {
+                .bytes => |n| @intCast(n),
+                .eof => 0,
+                .would_block => -11,
+            };
         },
         else => return errno_mod.toReturn(.EBADF),
     }
@@ -1966,7 +2270,11 @@ fn handleWriteDirect(fd: usize, buf_ptr: usize, count: usize) isize {
             return @intCast(r.n);
         },
         .SOCKET => {
-            const w = socket.writeStream(entry.node_idx, src) catch |err| return errno_mod.toReturn(err);
+            const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
+            const w = socket.write(s_idx, src) catch |err| return errno_mod.toReturn(err);
+            if (socket.sockets[s_idx].peer_idx) |p_idx| {
+                task.wakeSocketReadWaiters(p_idx);
+            }
             return @intCast(w);
         },
         else => return errno_mod.toReturn(.EBADF),
@@ -1977,7 +2285,10 @@ fn retainFd(entry: vfs.FdEntry) void {
     switch (entry.kind) {
         .PIPE_READ => pipe_mod.retainReader(entry.node_idx),
         .PIPE_WRITE => pipe_mod.retainWriter(entry.node_idx),
-        .SOCKET => socket.retain(entry.node_idx),
+        .SOCKET => {
+            const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
+            socket.retain(s_idx);
+        },
         else => {},
     }
 }
@@ -1986,7 +2297,12 @@ fn closeFdEntry(entry: *vfs.FdEntry) void {
     switch (entry.kind) {
         .PIPE_READ => pipe_mod.closeReader(entry.node_idx),
         .PIPE_WRITE => pipe_mod.closeWriter(entry.node_idx),
-        .SOCKET => socket.close(entry.node_idx),
+        .SOCKET => {
+            const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
+            if (socket.close(s_idx)) |peer_idx| {
+                task.wakeSocketReadWaiters(peer_idx);
+            }
+        },
         else => {},
     }
     entry.* = .{};

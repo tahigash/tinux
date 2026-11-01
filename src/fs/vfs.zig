@@ -104,6 +104,7 @@ pub const FdKind = enum(u8) {
 pub const FdEntry = struct {
     kind: FdKind = .UNUSED,
     node_idx: usize = 0,
+    sock_idx: usize = 0,
     offset: usize = 0,
     flags: u32 = 0,
     cloexec: bool = false,
@@ -576,4 +577,13 @@ pub fn initTaskFdTable(fd_table: *[MAX_OPEN_FILES]FdEntry) void {
     fd_table[1] = .{ .kind = .CONSOLE_OUT, .flags = O_WRONLY };
     // FD 2: CONSOLE_ERR
     fd_table[2] = .{ .kind = .CONSOLE_ERR, .flags = O_WRONLY };
+}
+
+pub fn allocFd(fd_table: *[MAX_OPEN_FILES]FdEntry, min_fd: usize) ?usize {
+    for (min_fd..MAX_OPEN_FILES) |i| {
+        if (fd_table[i].kind == .UNUSED) {
+            return i;
+        }
+    }
+    return null;
 }

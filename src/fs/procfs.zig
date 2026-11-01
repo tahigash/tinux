@@ -4,13 +4,15 @@ const pmm = @import("../mm/pmm.zig");
 const task = @import("../proc/task.zig");
 const timer = @import("../drivers/timer.zig");
 const profiler = @import("../syscall/profiler.zig");
+const socket = @import("../net/socket.zig");
 
 var meminfo_buf: [256]u8 = undefined;
 var uptime_buf: [64]u8 = undefined;
 var proc_stat_bufs: [task.MAX_TASKS][256]u8 = undefined;
 var proc_status_bufs: [task.MAX_TASKS][256]u8 = undefined;
 var proc_cmdline_bufs: [task.MAX_TASKS][128]u8 = undefined;
-var net_tcp_buf: [1024]u8 = undefined;
+var net_tcp_buf: [2048]u8 = undefined;
+var net_unix_buf: [2048]u8 = undefined;
 var syscalls_buf: [4096]u8 = undefined;
 var strace_buf: [256]u8 = undefined;
 
@@ -46,6 +48,17 @@ pub fn initAndRegister() void {
         vfs.S_IFREG | 0o444,
         "cpu  100 0 100 1000 0 0 0 0 0 0\ncpu0 100 0 100 1000 0 0 0 0 0 0\n",
     );
+    _ = vfs.registerNode("proc/net", vfs.S_IFDIR | 0o555, "");
+    _ = vfs.registerNode(
+        "proc/net/tcp",
+        vfs.S_IFREG | 0o444,
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n",
+    );
+    _ = vfs.registerNode(
+        "proc/net/unix",
+        vfs.S_IFREG | 0o444,
+        "Num       RefCount Protocol Flags    Type St Inode Path\n",
+    );
 
     refreshDynamicNodes();
 }
@@ -73,6 +86,64 @@ pub fn refreshDynamicNodes() void {
     // /proc/strace status
     const strace_slice = std.fmt.bufPrint(&strace_buf, "enabled: 1\n", .{}) catch "enabled: 1\n";
     _ = vfs.registerNode("proc/strace", vfs.S_IFREG | 0o444, strace_slice);
+
+    // /proc/net/tcp
+    var tcp_pos: usize = 0;
+    const tcp_hdr = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+    @memcpy(net_tcp_buf[tcp_pos .. tcp_pos + tcp_hdr.len], tcp_hdr);
+    tcp_pos += tcp_hdr.len;
+
+    var tcp_sl: usize = 0;
+    for (&socket.sockets, 0..) |*s, idx| {
+        if (s.in_use and s.domain == socket.AF_INET) {
+            const st_hex: []const u8 = switch (s.state) {
+                .LISTENING => "0A",
+                .CONNECTED => "01",
+                else => "07",
+            };
+            const rem_port = if (s.state == .CONNECTED and s.peer_idx != null) socket.sockets[s.peer_idx.?].bound_port else 0;
+            const rem_ip: []const u8 = if (s.state == .CONNECTED and s.peer_idx != null) "0100007F" else "00000000";
+
+            var row_buf: [160]u8 = undefined;
+            const row = std.fmt.bufPrint(
+                &row_buf,
+                "   {d}: 0100007F:{X:0>4} {s}:{X:0>4} {s} 00000000:00000000 00:00000000 00000000     0        0 {d}\n",
+                .{ tcp_sl, s.bound_port, rem_ip, rem_port, st_hex, 1001 + idx },
+            ) catch continue;
+
+            if (tcp_pos + row.len <= net_tcp_buf.len) {
+                @memcpy(net_tcp_buf[tcp_pos .. tcp_pos + row.len], row);
+                tcp_pos += row.len;
+                tcp_sl += 1;
+            }
+        }
+    }
+    _ = vfs.registerNode("proc/net/tcp", vfs.S_IFREG | 0o444, net_tcp_buf[0..tcp_pos]);
+
+    // /proc/net/unix
+    var unix_pos: usize = 0;
+    const unix_hdr = "Num       RefCount Protocol Flags    Type St Inode Path\n";
+    @memcpy(net_unix_buf[unix_pos .. unix_pos + unix_hdr.len], unix_hdr);
+    unix_pos += unix_hdr.len;
+
+    for (&socket.sockets, 0..) |*s, idx| {
+        if (s.in_use and s.domain == socket.AF_UNIX) {
+            var row_buf: [160]u8 = undefined;
+            const path_str = if (s.bound_path_len > 0) s.bound_path[0..s.bound_path_len] else "";
+            const st_val: u8 = if (s.state == .CONNECTED) 3 else if (s.state == .LISTENING) 1 else 0;
+            const row = std.fmt.bufPrint(
+                &row_buf,
+                "{X:0>16}: {X:0>8} 00000000 00010000 0001 {X:0>2} {d:>6} {s}\n",
+                .{ @as(u64, @intCast(idx)), @as(u32, @intCast(s.ref_count)), st_val, 2001 + idx, path_str },
+            ) catch continue;
+
+            if (unix_pos + row.len <= net_unix_buf.len) {
+                @memcpy(net_unix_buf[unix_pos .. unix_pos + row.len], row);
+                unix_pos += row.len;
+            }
+        }
+    }
+    _ = vfs.registerNode("proc/net/unix", vfs.S_IFREG | 0o444, net_unix_buf[0..unix_pos]);
 
     syncProcessNodes();
 }
