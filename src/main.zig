@@ -172,6 +172,61 @@ fn runTask003() noreturn {
     std.debug.assert(slice2_addr == slice1_addr);
     alloc.free(slice2);
 
+    // Hardened Alignment Verification: 64-byte alignment
+    const ptr_align64 = heap.kmallocAligned(64, 64) orelse @panic("TASK-003: kmallocAligned(64, 64) failed!");
+    std.debug.assert(@intFromPtr(ptr_align64) % 64 == 0);
+    const slice64 = ptr_align64[0..64];
+    for (slice64, 0..) |*b, i| {
+        b.* = @as(u8, @truncate(i ^ 0xA5));
+    }
+    for (slice64, 0..) |b, i| {
+        std.debug.assert(b == @as(u8, @truncate(i ^ 0xA5)));
+    }
+    heap.kfree(ptr_align64);
+
+    // Hardened Varied Heap Allocations: multiple sizes, alignments, and out-of-order freeing
+    const v_u8 = alloc.alloc(u8, 64) catch @panic("TASK-003: v_u8 alloc failed");
+    const v_u16 = alloc.alloc(u16, 128) catch @panic("TASK-003: v_u16 alloc failed");
+    const v_u32 = alloc.alloc(u32, 256) catch @panic("TASK-003: v_u32 alloc failed");
+    const v_u64 = alloc.alloc(u64, 512) catch @panic("TASK-003: v_u64 alloc failed");
+
+    for (v_u8, 0..) |*b, i| {
+        b.* = @as(u8, @truncate(i *% 3 +% 1));
+    }
+    for (v_u16, 0..) |*w, i| {
+        w.* = @as(u16, @truncate(i *% 7 +% 0x100));
+    }
+    for (v_u32, 0..) |*d, i| {
+        d.* = @as(u32, @truncate(i *% 13 +% 0x10000));
+    }
+    for (v_u64, 0..) |*q, i| {
+        q.* = 0xFEED_FACE_0000_0000 | @as(u64, i);
+    }
+
+    for (v_u8, 0..) |b, i| {
+        std.debug.assert(b == @as(u8, @truncate(i *% 3 +% 1)));
+    }
+    for (v_u16, 0..) |w, i| {
+        std.debug.assert(w == @as(u16, @truncate(i *% 7 +% 0x100)));
+    }
+    for (v_u32, 0..) |d, i| {
+        std.debug.assert(d == @as(u32, @truncate(i *% 13 +% 0x10000)));
+    }
+    for (v_u64, 0..) |q, i| {
+        std.debug.assert(q == (0xFEED_FACE_0000_0000 | @as(u64, i)));
+    }
+
+    // Out-of-order deallocation to verify bidirectional free-list coalescing
+    alloc.free(v_u16);
+    alloc.free(v_u64);
+    alloc.free(v_u8);
+    alloc.free(v_u32);
+
+    // Verify heap memory clean reuse after complete coalescing
+    const slice_reuse = alloc.alloc(u64, 32) catch @panic("TASK-003: slice_reuse alloc failed");
+    std.debug.assert(@intFromPtr(slice_reuse.ptr) == slice1_addr);
+    alloc.free(slice_reuse);
+
     serial.writeString("[TINUX_TEST] PASS: TASK-003\n");
     io.qemuExitSuccess();
 }

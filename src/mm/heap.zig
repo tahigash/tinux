@@ -64,10 +64,15 @@ pub fn kmallocAligned(size: usize, alignment: usize) ?[*]u8 {
         if (!block.is_free) continue;
 
         const payload_start = @intFromPtr(block) + HEADER_SIZE;
-        const aligned_start = std.mem.alignForward(usize, payload_start, eff_align);
-        const align_pad = aligned_start - payload_start;
+        var aligned_start = std.mem.alignForward(usize, payload_start, eff_align);
+        var align_pad = aligned_start - payload_start;
 
-        if (block.size < align_pad + aligned_len) continue;
+        while (align_pad > 0 and align_pad < HEADER_SIZE + 32) {
+            aligned_start += eff_align;
+            align_pad = aligned_start - payload_start;
+        }
+
+        if (block.size < align_pad or block.size - align_pad < aligned_len) continue;
 
         if (align_pad >= HEADER_SIZE + 32) {
             // Split front padding into a separate free block
