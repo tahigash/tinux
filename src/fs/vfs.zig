@@ -3,8 +3,9 @@ const Errno = @import("../uapi/errno.zig").Errno;
 const heap = @import("../mm/heap.zig");
 
 pub const MAX_VFS_NODES: usize = 128;
-pub const MAX_OPEN_FILES: usize = 32;
+pub const MAX_OPEN_FILES: usize = 64;
 pub const MAX_PATH_LEN: usize = 128;
+pub const MAX_FILE_SIZE: usize = 65536;
 
 pub const S_IFMT: u32 = 0o170000;
 pub const S_IFDIR: u32 = 0o040000;
@@ -113,23 +114,20 @@ pub const VfsNode = struct {
     name_buf: [MAX_PATH_LEN]u8 = [_]u8{0} ** MAX_PATH_LEN,
     name_len: usize = 0,
     mode: u32 = 0,
-    data_ptr: ?[*]const u8 = null,
+    static_data: []const u8 = "",
+    rw_buf: ?[*]u8 = null,
+    rw_cap: usize = 0,
     size: usize = 0,
-    writable_ptr: ?[*]u8 = null,
-    capacity: usize = 0,
 
     pub fn name(self: *const VfsNode) []const u8 {
         return self.name_buf[0..self.name_len];
     }
 
     pub fn slice(self: *const VfsNode) []const u8 {
-        if (self.writable_ptr) |wp| {
-            return wp[0..self.size];
+        if (self.rw_buf) |ptr| {
+            return ptr[0..self.size];
         }
-        if (self.data_ptr) |p| {
-            return p[0..self.size];
-        }
-        return "";
+        return self.static_data[0..self.size];
     }
 
     pub fn isDir(self: *const VfsNode) bool {
@@ -205,29 +203,55 @@ pub fn resolveTaskPath(cwd_path: []const u8, raw_path: []const u8, out_buf: *[MA
     return out_buf[0..out_pos];
 }
 
+pub fn isDirectChild(dir_path: []const u8, node_path: []const u8) ?[]const u8 {
+    const norm_dir = normalizePath(dir_path);
+    const is_root = norm_dir.len == 0 or std.mem.eql(u8, norm_dir, ".");
+    if (is_root) {
+        if (node_path.len > 0 and !std.mem.eql(u8, node_path, ".") and std.mem.indexOfScalar(u8, node_path, '/') == null) {
+            return node_path;
+        }
+        return null;
+    }
+    if (std.mem.startsWith(u8, node_path, norm_dir) and
+        node_path.len > norm_dir.len and
+        node_path[norm_dir.len] == '/')
+    {
+        const sub = node_path[norm_dir.len + 1 ..];
+        if (sub.len > 0 and std.mem.indexOfScalar(u8, sub, '/') == null) {
+            return sub;
+        }
+    }
+    return null;
+}
+
 pub fn init() void {
     for (&nodes) |*n| {
         n.* = .{};
     }
     // Register standard root directories
-    _ = registerNode("", S_IFDIR | 0o755, "");
-    _ = registerNode("bin", S_IFDIR | 0o755, "");
-    _ = registerNode("etc", S_IFDIR | 0o755, "");
-    _ = registerNode("dev", S_IFDIR | 0o755, "");
-    _ = registerNode("proc", S_IFDIR | 0o755, "");
-    _ = registerNode("tmp", S_IFDIR | 0o777, "");
-    _ = registerNode("mnt", S_IFDIR | 0o755, "");
+    _ = registerNodeInternal("", S_IFDIR | 0o755, "");
+    _ = registerNodeInternal("bin", S_IFDIR | 0o755, "");
+    _ = registerNodeInternal("etc", S_IFDIR | 0o755, "");
+    _ = registerNodeInternal("dev", S_IFDIR | 0o755, "");
+    _ = registerNodeInternal("proc", S_IFDIR | 0o755, "");
+    _ = registerNodeInternal("tmp", S_IFDIR | 0o777, "");
+    _ = registerNodeInternal("mnt", S_IFDIR | 0o755, "");
 
     // Register /dev/tty, /dev/console, and /dev/null as character devices
-    _ = registerNode("dev/tty", S_IFCHR | 0o666, "");
-    _ = registerNode("dev/console", S_IFCHR | 0o666, "");
-    _ = registerNode("dev/null", S_IFCHR | 0o666, "");
+    _ = registerNodeInternal("dev/tty", S_IFCHR | 0o666, "");
+    _ = registerNodeInternal("dev/console", S_IFCHR | 0o666, "");
+    _ = registerNodeInternal("dev/null", S_IFCHR | 0o666, "");
 }
 
-pub fn registerNode(norm_path: []const u8, mode: u32, data: []const u8) usize {
+fn registerNodeInternal(norm_path: []const u8, mode: u32, data: []const u8) usize {
     if (lookupExact(norm_path)) |existing| {
         nodes[existing].mode = mode;
-        nodes[existing].data_ptr = data.ptr;
+        if (nodes[existing].rw_buf) |ptr| {
+            heap.allocator().free(ptr[0..nodes[existing].rw_cap]);
+            nodes[existing].rw_buf = null;
+            nodes[existing].rw_cap = 0;
+        }
+        nodes[existing].static_data = data;
         nodes[existing].size = data.len;
         return existing;
     }
@@ -239,20 +263,49 @@ pub fn registerNode(norm_path: []const u8, mode: u32, data: []const u8) usize {
             const cpy_len = @min(norm_path.len, MAX_PATH_LEN);
             @memcpy(n.name_buf[0..cpy_len], norm_path[0..cpy_len]);
             n.name_len = cpy_len;
-            n.data_ptr = if (data.len > 0) data.ptr else null;
+            n.static_data = data;
             n.size = data.len;
-            n.writable_ptr = null;
-            n.capacity = 0;
+            n.rw_buf = null;
+            n.rw_cap = 0;
             return idx;
         }
     }
     @panic("VFS: out of node slots");
 }
 
+fn ensureParentDirs(norm_path: []const u8) void {
+    var i: usize = 0;
+    while (i < norm_path.len) : (i += 1) {
+        if (norm_path[i] == '/') {
+            const parent = norm_path[0..i];
+            if (parent.len > 0 and lookupExact(parent) == null) {
+                _ = registerNodeInternal(parent, S_IFDIR | 0o755, "");
+            }
+        }
+    }
+}
+
+pub fn registerNode(norm_path: []const u8, mode: u32, data: []const u8) usize {
+    ensureParentDirs(norm_path);
+    return registerNodeInternal(norm_path, mode, data);
+}
+
 pub fn createNode(norm_path: []const u8, mode: u32) Errno!usize {
+    if (norm_path.len == 0) return Errno.EINVAL;
     if (lookupExact(norm_path) != null) {
         return Errno.EEXIST;
     }
+
+    // Verify parent directory exists and is a directory
+    if (std.mem.lastIndexOfScalar(u8, norm_path, '/')) |slash_idx| {
+        const parent_path = norm_path[0..slash_idx];
+        const p_idx = lookupExact(parent_path) orelse return Errno.ENOENT;
+        if (!nodes[p_idx].isDir()) return Errno.ENOTDIR;
+    } else {
+        const root_idx = lookupExact("") orelse return Errno.ENOENT;
+        if (!nodes[root_idx].isDir()) return Errno.ENOTDIR;
+    }
+
     for (&nodes, 0..) |*n, idx| {
         if (!n.in_use) {
             n.in_use = true;
@@ -260,10 +313,10 @@ pub fn createNode(norm_path: []const u8, mode: u32) Errno!usize {
             const cpy_len = @min(norm_path.len, MAX_PATH_LEN);
             @memcpy(n.name_buf[0..cpy_len], norm_path[0..cpy_len]);
             n.name_len = cpy_len;
-            n.data_ptr = null;
+            n.static_data = "";
             n.size = 0;
-            n.writable_ptr = null;
-            n.capacity = 0;
+            n.rw_buf = null;
+            n.rw_cap = 0;
             return idx;
         }
     }
@@ -273,18 +326,23 @@ pub fn createNode(norm_path: []const u8, mode: u32) Errno!usize {
 pub fn truncateNode(node_idx: usize) void {
     if (node_idx >= MAX_VFS_NODES or !nodes[node_idx].in_use) return;
     nodes[node_idx].size = 0;
-    if (nodes[node_idx].writable_ptr) |wp| {
-        @memset(wp[0..nodes[node_idx].capacity], 0);
+    if (nodes[node_idx].rw_buf) |wp| {
+        @memset(wp[0..nodes[node_idx].rw_cap], 0);
     }
 }
 
 pub fn writeNode(node_idx: usize, offset: usize, src: []const u8) Errno!usize {
     if (node_idx >= MAX_VFS_NODES or !nodes[node_idx].in_use) return Errno.EBADF;
     var node = &nodes[node_idx];
-    const end_pos = offset + src.len;
+    if (node.isDir()) return Errno.EISDIR;
+    if (src.len == 0) return 0;
 
-    if (node.writable_ptr == null or end_pos > node.capacity) {
-        const new_cap = @max(std.mem.alignForward(usize, end_pos, 256), 256);
+    const end_pos = std.math.add(usize, offset, src.len) catch return Errno.ENOSPC;
+    if (end_pos > MAX_FILE_SIZE) return Errno.ENOSPC;
+
+    if (node.rw_buf == null or end_pos > node.rw_cap) {
+        const aligned = std.mem.alignForward(usize, end_pos, 256);
+        const new_cap = @min(MAX_FILE_SIZE, @max(aligned, 256));
         const new_slice = heap.allocator().alloc(u8, new_cap) catch return Errno.ENOMEM;
         @memset(new_slice, 0);
 
@@ -294,16 +352,15 @@ pub fn writeNode(node_idx: usize, offset: usize, src: []const u8) Errno!usize {
             @memcpy(new_slice[0..copy_len], old_slice[0..copy_len]);
         }
 
-        if (node.writable_ptr) |old_ptr| {
-            heap.allocator().free(old_ptr[0..node.capacity]);
+        if (node.rw_buf) |old_ptr| {
+            heap.allocator().free(old_ptr[0..node.rw_cap]);
         }
 
-        node.writable_ptr = new_slice.ptr;
-        node.data_ptr = new_slice.ptr;
-        node.capacity = new_cap;
+        node.rw_buf = new_slice.ptr;
+        node.rw_cap = new_cap;
     }
 
-    @memcpy(node.writable_ptr.?[offset .. offset + src.len], src);
+    @memcpy(node.rw_buf.?[offset .. offset + src.len], src);
     if (end_pos > node.size) {
         node.size = end_pos;
     }
@@ -311,6 +368,7 @@ pub fn writeNode(node_idx: usize, offset: usize, src: []const u8) Errno!usize {
 }
 
 pub fn unlinkNode(norm_path: []const u8, remove_dir: bool) Errno!void {
+    if (norm_path.len == 0) return Errno.EBUSY;
     const idx = lookupExact(norm_path) orelse return Errno.ENOENT;
     const node = &nodes[idx];
     if (node.isDir() and !remove_dir) {
@@ -319,14 +377,24 @@ pub fn unlinkNode(norm_path: []const u8, remove_dir: bool) Errno!void {
     if (!node.isDir() and remove_dir) {
         return Errno.ENOTDIR;
     }
-    if (node.writable_ptr) |wp| {
-        heap.allocator().free(wp[0..node.capacity]);
-        node.writable_ptr = null;
+    if (node.isDir()) {
+        for (&nodes) |*cand| {
+            if (cand.in_use and isDirectChild(norm_path, cand.name()) != null) {
+                return Errno.ENOTEMPTY;
+            }
+        }
+    }
+    if (node.rw_buf) |wp| {
+        heap.allocator().free(wp[0..node.rw_cap]);
+        node.rw_buf = null;
     }
     node.in_use = false;
+    node.mode = 0;
+    node.static_data = "";
     node.size = 0;
-    node.capacity = 0;
+    node.rw_cap = 0;
     node.name_len = 0;
+    @memset(&node.name_buf, 0);
 }
 
 pub fn lookupExact(norm_path: []const u8) ?usize {
@@ -405,9 +473,9 @@ pub fn fillStat(node_idx: usize, stat_out: *LinuxStat) void {
     };
 }
 
-pub fn readDirEntries64(dir_node_idx: usize, cursor_inout: *usize, user_buf: []u8) usize {
+pub fn readDirEntries64(dir_node_idx: usize, cursor_inout: *usize, user_buf: []u8) Errno!usize {
     if (dir_node_idx >= MAX_VFS_NODES or !nodes[dir_node_idx].in_use or !nodes[dir_node_idx].isDir()) {
-        return 0;
+        return Errno.ENOTDIR;
     }
 
     const dir_path = nodes[dir_node_idx].name();
@@ -426,37 +494,17 @@ pub fn readDirEntries64(dir_node_idx: usize, cursor_inout: *usize, user_buf: []u
         } else if (cur == 1) {
             d_name = "..";
             d_type = DT_DIR;
-            d_ino = 1;
+            if (dir_path.len == 0) {
+                d_ino = 1;
+            } else {
+                const p_name = if (std.mem.lastIndexOfScalar(u8, dir_path, '/')) |idx| dir_path[0..idx] else "";
+                d_ino = if (lookupExact(p_name)) |p_idx| @as(u64, p_idx + 1) else 1;
+            }
         } else {
             const n_idx = cur - 2;
             if (n_idx < MAX_VFS_NODES and nodes[n_idx].in_use) {
                 const node = &nodes[n_idx];
-                const full_name = node.name();
-
-                // Direct child check
-                var is_child = false;
-                var rel_name: []const u8 = "";
-
-                if (dir_path.len == 0) {
-                    // Root directory: direct child has no '/'
-                    if (full_name.len > 0 and std.mem.indexOfScalar(u8, full_name, '/') == null) {
-                        is_child = true;
-                        rel_name = full_name;
-                    }
-                } else {
-                    if (std.mem.startsWith(u8, full_name, dir_path) and
-                        full_name.len > dir_path.len and
-                        full_name[dir_path.len] == '/')
-                    {
-                        const sub = full_name[dir_path.len + 1 ..];
-                        if (sub.len > 0 and std.mem.indexOfScalar(u8, sub, '/') == null) {
-                            is_child = true;
-                            rel_name = sub;
-                        }
-                    }
-                }
-
-                if (is_child) {
+                if (isDirectChild(dir_path, node.name())) |rel_name| {
                     d_name = rel_name;
                     d_type = modeToDtype(node.mode);
                     d_ino = @as(u64, n_idx + 1);
@@ -476,6 +524,9 @@ pub fn readDirEntries64(dir_node_idx: usize, cursor_inout: *usize, user_buf: []u
             const reclen = std.mem.alignForward(usize, rec_min, 8);
 
             if (written + reclen > user_buf.len) {
+                if (written == 0) {
+                    return Errno.EINVAL;
+                }
                 break; // Buffer full
             }
 

@@ -174,8 +174,19 @@ fn cmdGrep(args: []const []const u8) usize {
     return 0;
 }
 
-fn cmdLs(args: []const []const u8) usize {
-    const dir = if (args.len > 1) args[1] else "/";
+fn lsMain(args: []const []const u8) usize {
+    var dir: []const u8 = "/";
+    var long_format: bool = false;
+    for (args[1..]) |a| {
+        if (std.mem.startsWith(u8, a, "-")) {
+            if (std.mem.indexOfScalar(u8, a, 'l') != null) {
+                long_format = true;
+            }
+            continue;
+        }
+        dir = a;
+        break;
+    }
     const fd = openPath(dir, 0o200000, 0);
     if (fd < 0) return 1;
     var dbuf: [1024]u8 = undefined;
@@ -189,6 +200,10 @@ fn cmdLs(args: []const []const u8) usize {
             const name_ptr = @as([*:0]const u8, @ptrCast(&dbuf[off + 19]));
             const name = std.mem.sliceTo(name_ptr, 0);
             if (!std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, "..")) {
+                if (long_format) {
+                    if (d.d_type == 4) puts("d ");
+                    if (d.d_type == 8) puts("- ");
+                }
                 puts(name);
                 puts("\n");
             }
@@ -196,6 +211,72 @@ fn cmdLs(args: []const []const u8) usize {
         }
     }
     _ = sys1(3, @intCast(fd));
+    return 0;
+}
+const cmdLs = lsMain;
+
+fn mkdirMain(args: []const []const u8) usize {
+    var parents = false;
+    for (args[1..]) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.indexOfScalar(u8, arg, 'p') != null) {
+                parents = true;
+            }
+            continue;
+        }
+        if (parents) {
+            var i: usize = 0;
+            while (i < arg.len) : (i += 1) {
+                if (arg[i] == '/' and i > 0) {
+                    const sub = arg[0..i];
+                    var b: [256]u8 = undefined;
+                    _ = sys3(258, @bitCast(@as(isize, -100)), @intFromPtr(cstr(sub, &b)), 0o755);
+                }
+            }
+        }
+        var b: [256]u8 = undefined;
+        _ = sys3(258, @bitCast(@as(isize, -100)), @intFromPtr(cstr(arg, &b)), 0o755);
+    }
+    return 0;
+}
+
+fn touchMain(args: []const []const u8) usize {
+    for (args[1..]) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) continue;
+        var b: [256]u8 = undefined;
+        const r = sys4(280, @bitCast(@as(isize, -100)), @intFromPtr(cstr(arg, &b)), 0, 0);
+        if (r != 0) {
+            const fd = openPath(arg, 0o100 | 0o1, 0o644);
+            if (fd >= 0) _ = sys1(3, @intCast(fd));
+        }
+    }
+    return 0;
+}
+
+fn rmMain(args: []const []const u8) usize {
+    var recursive = false;
+    for (args[1..]) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.indexOfScalar(u8, arg, 'r') != null or std.mem.indexOfScalar(u8, arg, 'R') != null) {
+                recursive = true;
+            }
+            continue;
+        }
+        var b: [256]u8 = undefined;
+        const r = sys3(263, @bitCast(@as(isize, -100)), @intFromPtr(cstr(arg, &b)), 0);
+        if (recursive and r != 0) {
+            _ = sys3(263, @bitCast(@as(isize, -100)), @intFromPtr(cstr(arg, &b)), 0x200);
+        }
+    }
+    return 0;
+}
+
+fn rmdirMain(args: []const []const u8) usize {
+    for (args[1..]) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) continue;
+        var b: [256]u8 = undefined;
+        _ = sys3(263, @bitCast(@as(isize, -100)), @intFromPtr(cstr(arg, &b)), 0x200);
+    }
     return 0;
 }
 
@@ -506,18 +587,17 @@ export fn bbMain(initial_rsp: [*]const u64) callconv(.C) noreturn {
     } else if (std.mem.eql(u8, app, "grep")) {
         rc = cmdGrep(slice);
     } else if (std.mem.eql(u8, app, "ls")) {
-        rc = cmdLs(slice);
+        rc = lsMain(slice);
     } else if (std.mem.eql(u8, app, "ps")) {
         rc = cmdPs();
-    } else if (std.mem.eql(u8, app, "mkdir") and slice.len >= 2) {
-        var b: [256]u8 = undefined;
-        _ = sys3(258, @bitCast(@as(isize, -100)), @intFromPtr(cstr(slice[1], &b)), 0o755);
-    } else if (std.mem.eql(u8, app, "touch") and slice.len >= 2) {
-        const fd = openPath(slice[1], 0o100 | 0o1, 0o644);
-        if (fd >= 0) _ = sys1(3, @intCast(fd));
-    } else if (std.mem.eql(u8, app, "rm") and slice.len >= 2) {
-        var b: [256]u8 = undefined;
-        _ = sys3(263, @bitCast(@as(isize, -100)), @intFromPtr(cstr(slice[1], &b)), 0);
+    } else if (std.mem.eql(u8, app, "mkdir")) {
+        rc = mkdirMain(slice);
+    } else if (std.mem.eql(u8, app, "touch")) {
+        rc = touchMain(slice);
+    } else if (std.mem.eql(u8, app, "rm")) {
+        rc = rmMain(slice);
+    } else if (std.mem.eql(u8, app, "rmdir")) {
+        rc = rmdirMain(slice);
     } else if (std.mem.eql(u8, app, "sleep")) {
         var ts = LinuxTimespec{ .tv_sec = 1, .tv_nsec = 0 };
         _ = sys2(35, @intFromPtr(&ts), 0);

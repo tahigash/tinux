@@ -96,10 +96,10 @@ ensure_busybox_elf() {
         if file "$bb_path" | grep -q "x86-64" && file "$bb_path" | grep -q "statically linked"; then
             cp "$bb_path" "$bb_out"
             chmod +x "$bb_out"
-            cp "$bb_out" "${INITRAMFS_ROOT}/bin/sh"
-            cp "$bb_out" "${INITRAMFS_ROOT}/bin/cat"
-            cp "$bb_out" "${INITRAMFS_ROOT}/bin/grep"
-            chmod +x "${INITRAMFS_ROOT}/bin/sh" "${INITRAMFS_ROOT}/bin/cat" "${INITRAMFS_ROOT}/bin/grep"
+            for app in sh cat grep ls mkdir touch rm rmdir sleep ps mount umount sync; do
+                cp "$bb_out" "${INITRAMFS_ROOT}/bin/$app"
+                chmod +x "${INITRAMFS_ROOT}/bin/$app"
+            done
             return 0
         fi
     fi
@@ -109,10 +109,10 @@ ensure_busybox_elf() {
         return 1
     fi
     build_user_elf "$bb_src" "$bb_out" "-fno-PIE" || return 1
-    cp "$bb_out" "${INITRAMFS_ROOT}/bin/sh"
-    cp "$bb_out" "${INITRAMFS_ROOT}/bin/cat"
-    cp "$bb_out" "${INITRAMFS_ROOT}/bin/grep"
-    chmod +x "${INITRAMFS_ROOT}/bin/sh" "${INITRAMFS_ROOT}/bin/cat" "${INITRAMFS_ROOT}/bin/grep"
+    for app in sh cat grep ls mkdir touch rm rmdir sleep ps mount umount sync; do
+        cp "$bb_out" "${INITRAMFS_ROOT}/bin/$app"
+        chmod +x "${INITRAMFS_ROOT}/bin/$app"
+    done
     return 0
 }
 # ------------------------------------------------------------------------------

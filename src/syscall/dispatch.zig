@@ -71,6 +71,7 @@ pub const SYS_GETCWD: u64 = 79;
 pub const SYS_CHDIR: u64 = 80;
 pub const SYS_MKDIR: u64 = 83;
 pub const SYS_RMDIR: u64 = 84;
+pub const SYS_CREAT: u64 = 85;
 pub const SYS_UNLINK: u64 = 87;
 pub const SYS_READLINK: u64 = 89;
 pub const SYS_GETUID: u64 = 102;
@@ -96,12 +97,14 @@ pub const SYS_NEWFSTATAT: u64 = 262;
 pub const SYS_UNLINKAT: u64 = 263;
 pub const SYS_READLINKAT: u64 = 267;
 pub const SYS_FACCESSAT: u64 = 269;
+pub const SYS_UTIMENSAT: u64 = 280;
 pub const SYS_ACCEPT4: u64 = 288;
 pub const SYS_DUP3: u64 = 292;
 pub const SYS_PIPE2: u64 = 293;
 pub const SYS_SET_ROBUST_LIST: u64 = 273;
 pub const SYS_PRLIMIT64: u64 = 302;
 pub const SYS_GETRANDOM: u64 = 318;
+pub const SYS_STATX: u64 = 332;
 pub const SYS_FACCESSAT2: u64 = 439;
 
 // Whence modes for sys_lseek
@@ -290,6 +293,37 @@ pub fn sysSetTidAddress(tidptr: usize) usize {
     const cur_task = task.currentTask();
     cur_task.clear_child_tid = tidptr;
     return if (cur_task.pid != 0) cur_task.pid else 1;
+}
+
+fn resolveAtBaseDir(dirfd: isize, path_str: []const u8) Errno![]const u8 {
+    const cur_task = task.currentTask();
+    if (path_str.len > 0 and path_str[0] == '/') {
+        return "";
+    }
+    if (dirfd == vfs.AT_FDCWD) {
+        return cur_task.cwd();
+    }
+    if (dirfd >= 0 and dirfd < vfs.MAX_OPEN_FILES) {
+        const ufd: usize = @intCast(dirfd);
+        if (cur_task.fd_table[ufd].kind == .UNUSED) return Errno.EBADF;
+        if (cur_task.fd_table[ufd].kind != .VFS_FILE) return Errno.ENOTDIR;
+        const dnode = vfs.getNode(cur_task.fd_table[ufd].node_idx);
+        if (!dnode.isDir()) return Errno.ENOTDIR;
+        return dnode.name();
+    }
+    return Errno.EBADF;
+}
+
+fn handleUnlinkat(dirfd: isize, path_str: []const u8, flags: usize) isize {
+    const base_dir = resolveAtBaseDir(dirfd, path_str) catch |err| {
+        return errno_mod.toReturn(err);
+    };
+    var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+    const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);
+    vfs.unlinkNode(resolved, (flags & vfs.AT_REMOVEDIR) != 0) catch |err| {
+        return errno_mod.toReturn(err);
+    };
+    return 0;
 }
 
 export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
@@ -1298,14 +1332,20 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         SYS_MKDIR, SYS_MKDIRAT => {
+            const dirfd: isize = if (num == SYS_MKDIRAT) @bitCast(a1) else vfs.AT_FDCWD;
             const path_ptr = if (num == SYS_MKDIRAT) a2 else a1;
             const mode: u32 = @truncate(if (num == SYS_MKDIRAT) a3 else a2);
-            const path_str = getUserString(path_ptr, 256) orelse {
-                res = errno_mod.toReturn(.EFAULT);
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(path_ptr, &raw_path) catch |err| {
+                res = errno_mod.toReturn(err);
+                break :blk;
+            };
+            const base_dir = resolveAtBaseDir(dirfd, path_str) catch |err| {
+                res = errno_mod.toReturn(err);
                 break :blk;
             };
             var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
-            const resolved = vfs.resolveTaskPath(cur_task.cwd(), path_str, &path_buf);
+            const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);
             _ = vfs.createNode(resolved, vfs.S_IFDIR | (mode & 0o777)) catch |err| {
                 res = errno_mod.toReturn(err);
                 break :blk;
@@ -1313,34 +1353,35 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             res = 0;
         },
 
-        SYS_RMDIR => {
-            const path_str = getUserString(a1, 256) orelse {
-                res = errno_mod.toReturn(.EFAULT);
-                break :blk;
-            };
-            var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
-            const resolved = vfs.resolveTaskPath(cur_task.cwd(), path_str, &path_buf);
-            vfs.unlinkNode(resolved, true) catch |err| {
+        SYS_CREAT => {
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(a1, &raw_path) catch |err| {
                 res = errno_mod.toReturn(err);
                 break :blk;
             };
-            res = 0;
+            const mode: u32 = @truncate(a2);
+            res = handleOpenat(vfs.AT_FDCWD, path_str, vfs.O_CREAT | vfs.O_WRONLY | vfs.O_TRUNC, mode);
+        },
+
+        SYS_RMDIR => {
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(a1, &raw_path) catch |err| {
+                res = errno_mod.toReturn(err);
+                break :blk;
+            };
+            res = handleUnlinkat(vfs.AT_FDCWD, path_str, vfs.AT_REMOVEDIR);
         },
 
         SYS_UNLINK, SYS_UNLINKAT => {
+            const dirfd: isize = if (num == SYS_UNLINKAT) @bitCast(a1) else vfs.AT_FDCWD;
             const path_ptr = if (num == SYS_UNLINKAT) a2 else a1;
-            const flags = if (num == SYS_UNLINKAT) a3 else 0;
-            const path_str = getUserString(path_ptr, 256) orelse {
-                res = errno_mod.toReturn(.EFAULT);
-                break :blk;
-            };
-            var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
-            const resolved = vfs.resolveTaskPath(cur_task.cwd(), path_str, &path_buf);
-            vfs.unlinkNode(resolved, flags == vfs.AT_REMOVEDIR) catch |err| {
+            const flags: usize = if (num == SYS_UNLINKAT) a3 else 0;
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(path_ptr, &raw_path) catch |err| {
                 res = errno_mod.toReturn(err);
                 break :blk;
             };
-            res = 0;
+            res = handleUnlinkat(dirfd, path_str, flags);
         },
 
         SYS_GETDENTS64 => {
@@ -1352,10 +1393,18 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             } else if (!validateUserBuffer(dirp_ptr, count)) {
                 res = errno_mod.toReturn(.EFAULT);
             } else {
-                procfs.syncProcessNodes();
                 const entry = &cur_task.fd_table[fd];
+                const node = vfs.getNode(entry.node_idx);
+                if (!node.isDir()) {
+                    res = errno_mod.toReturn(.ENOTDIR);
+                    break :blk;
+                }
+                procfs.syncProcessNodes();
                 const dst = @as([*]u8, @ptrFromInt(dirp_ptr))[0..count];
-                const written = vfs.readDirEntries64(entry.node_idx, &entry.offset, dst);
+                const written = vfs.readDirEntries64(entry.node_idx, &entry.offset, dst) catch |err| {
+                    res = errno_mod.toReturn(err);
+                    break :blk;
+                };
                 res = @intCast(written);
             }
         },
@@ -1438,8 +1487,9 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         SYS_PAUSE => res = 0,
 
         SYS_CHDIR => {
-            const path_str = getUserString(a1, 256) orelse {
-                res = errno_mod.toReturn(.EFAULT);
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(a1, &raw_path) catch |err| {
+                res = errno_mod.toReturn(err);
                 break :blk;
             };
             var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
@@ -1449,14 +1499,62 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 if (!node.isDir()) {
                     res = errno_mod.toReturn(.ENOTDIR);
                 } else {
-                    const n = @min(resolved.len, cur_task.cwd_buf.len - 1);
-                    @memcpy(cur_task.cwd_buf[0..n], resolved[0..n]);
-                    cur_task.cwd_len = n;
+                    cur_task.cwd_buf[0] = '/';
+                    if (resolved.len == 0) {
+                        cur_task.cwd_len = 1;
+                    } else {
+                        const n = @min(resolved.len, cur_task.cwd_buf.len - 2);
+                        @memcpy(cur_task.cwd_buf[1 .. 1 + n], resolved[0..n]);
+                        cur_task.cwd_len = 1 + n;
+                    }
                     res = 0;
                 }
             } else {
                 res = errno_mod.toReturn(.ENOENT);
             }
+        },
+
+        SYS_UTIMENSAT => {
+            const dirfd: isize = @bitCast(a1);
+            const path_ptr = a2;
+            const times_ptr = a3;
+            const flags: u32 = @truncate(a4);
+            if (times_ptr != 0 and !validateUserBuffer(times_ptr, 2 * @sizeOf(LinuxTimespec))) {
+                res = errno_mod.toReturn(.EFAULT);
+                break :blk;
+            }
+            if (path_ptr == 0) {
+                if ((flags & AT_EMPTY_PATH) != 0) {
+                    if (dirfd == vfs.AT_FDCWD or (dirfd >= 0 and dirfd < vfs.MAX_OPEN_FILES and cur_task.fd_table[@intCast(dirfd)].kind != .UNUSED)) {
+                        res = 0;
+                    } else {
+                        res = errno_mod.toReturn(.EBADF);
+                    }
+                } else {
+                    res = errno_mod.toReturn(.EINVAL);
+                }
+                break :blk;
+            }
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(path_ptr, &raw_path) catch |err| {
+                res = errno_mod.toReturn(err);
+                break :blk;
+            };
+            const base_dir = resolveAtBaseDir(dirfd, path_str) catch |err| {
+                res = errno_mod.toReturn(err);
+                break :blk;
+            };
+            var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);
+            if (vfs.lookup(resolved) == null) {
+                res = errno_mod.toReturn(.ENOENT);
+            } else {
+                res = 0;
+            }
+        },
+
+        SYS_STATX => {
+            res = errno_mod.toReturn(.ENOSYS);
         },
 
         SYS_SETPGID => {
@@ -1522,20 +1620,9 @@ fn handleOpenat(dirfd: isize, path_str: []const u8, flags: u32, mode: u32) isize
     const cur_task = task.currentTask();
     if (path_str.len == 0) return errno_mod.toReturn(.ENOENT);
 
-    var base_dir: []const u8 = "";
-    if (path_str[0] == '/') {
-        base_dir = "";
-    } else if (dirfd == vfs.AT_FDCWD) {
-        base_dir = cur_task.cwd();
-    } else if (dirfd >= 0 and dirfd < vfs.MAX_OPEN_FILES) {
-        const ufd: usize = @intCast(dirfd);
-        if (cur_task.fd_table[ufd].kind != .VFS_FILE) return errno_mod.toReturn(.ENOTDIR);
-        const dnode = vfs.getNode(cur_task.fd_table[ufd].node_idx);
-        if (!dnode.isDir()) return errno_mod.toReturn(.ENOTDIR);
-        base_dir = dnode.name();
-    } else {
-        return errno_mod.toReturn(.EBADF);
-    }
+    const base_dir = resolveAtBaseDir(dirfd, path_str) catch |err| {
+        return errno_mod.toReturn(err);
+    };
 
     var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
     const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);

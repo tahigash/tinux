@@ -125,34 +125,34 @@ pub fn unmapPage(pml4_phys: usize, vaddr: usize) ?usize {
 }
 
 pub fn translate(pml4_phys: usize, vaddr: usize) ?usize {
-    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
-    const pml4e = pml4.entries[pml4Index(vaddr)];
+    const pml4 = @as([*]const u64, @ptrFromInt(pml4_phys));
+    const pml4e = pml4[pml4Index(vaddr)];
     if ((pml4e & PTE_PRESENT) == 0) return null;
-    const pdpt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pml4e & PTE_ADDR_MASK))));
-    const pdpte = pdpt.entries[pdptIndex(vaddr)];
+    const pdpt = @as([*]const u64, @ptrFromInt(@as(usize, @intCast(pml4e & PTE_ADDR_MASK))));
+    const pdpte = pdpt[pdptIndex(vaddr)];
     if ((pdpte & PTE_PRESENT) == 0) return null;
-    const pd = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pdpte & PTE_ADDR_MASK))));
-    const pde = pd.entries[pdIndex(vaddr)];
+    const pd = @as([*]const u64, @ptrFromInt(@as(usize, @intCast(pdpte & PTE_ADDR_MASK))));
+    const pde = pd[pdIndex(vaddr)];
     if ((pde & PTE_PRESENT) == 0) return null;
-    const pt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pde & PTE_ADDR_MASK))));
-    const pte = pt.entries[ptIndex(vaddr)];
+    const pt = @as([*]const u64, @ptrFromInt(@as(usize, @intCast(pde & PTE_ADDR_MASK))));
+    const pte = pt[ptIndex(vaddr)];
     if ((pte & PTE_PRESENT) == 0) return null;
     const page_base: usize = @intCast(pte & PTE_ADDR_MASK);
     return page_base + (vaddr & 0xFFF);
 }
 
 pub fn getPteFlags(pml4_phys: usize, vaddr: usize) ?u64 {
-    const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
-    const pml4e = pml4.entries[pml4Index(vaddr)];
+    const pml4 = @as([*]const u64, @ptrFromInt(pml4_phys));
+    const pml4e = pml4[pml4Index(vaddr)];
     if ((pml4e & PTE_PRESENT) == 0) return null;
-    const pdpt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pml4e & PTE_ADDR_MASK))));
-    const pdpte = pdpt.entries[pdptIndex(vaddr)];
+    const pdpt = @as([*]const u64, @ptrFromInt(@as(usize, @intCast(pml4e & PTE_ADDR_MASK))));
+    const pdpte = pdpt[pdptIndex(vaddr)];
     if ((pdpte & PTE_PRESENT) == 0) return null;
-    const pd = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pdpte & PTE_ADDR_MASK))));
-    const pde = pd.entries[pdIndex(vaddr)];
+    const pd = @as([*]const u64, @ptrFromInt(@as(usize, @intCast(pdpte & PTE_ADDR_MASK))));
+    const pde = pd[pdIndex(vaddr)];
     if ((pde & PTE_PRESENT) == 0) return null;
-    const pt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pde & PTE_ADDR_MASK))));
-    const pte = pt.entries[ptIndex(vaddr)];
+    const pt = @as([*]const u64, @ptrFromInt(@as(usize, @intCast(pde & PTE_ADDR_MASK))));
+    const pte = pt[ptIndex(vaddr)];
     if ((pte & PTE_PRESENT) == 0) return null;
     return pte & 0xFFF;
 }
