@@ -8,6 +8,11 @@ pub const PTE_WRITABLE: u64 = 1 << 1;
 pub const PTE_USER: u64 = 1 << 2;
 pub const PTE_WRITE_THROUGH: u64 = 1 << 3;
 pub const PTE_CACHE_DISABLE: u64 = 1 << 4;
+pub const PTE_ACCESSED: u64 = 1 << 5;
+pub const PTE_DIRTY: u64 = 1 << 6;
+pub const PTE_HUGE: u64 = 1 << 7;
+pub const PTE_GLOBAL: u64 = 1 << 8;
+pub const PTE_NO_EXECUTE: u64 = 1 << 63;
 pub const PTE_ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 
 pub const PageTable = extern struct {
@@ -80,31 +85,37 @@ fn getOrCreateNextTable(table: *PageTable, idx: usize, is_user: bool) ?*PageTabl
 }
 
 pub fn mapPage(pml4_phys: usize, vaddr: usize, paddr: usize, flags: u64) bool {
+    std.debug.assert(vaddr % PAGE_SIZE == 0);
+    std.debug.assert(paddr % PAGE_SIZE == 0);
     const is_user = (flags & PTE_USER) != 0;
     const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
     const pdpt = getOrCreateNextTable(pml4, pml4Index(vaddr), is_user) orelse return false;
     const pd = getOrCreateNextTable(pdpt, pdptIndex(vaddr), is_user) orelse return false;
     const pt = getOrCreateNextTable(pd, pdIndex(vaddr), is_user) orelse return false;
 
-    const aligned_paddr: u64 = @as(u64, paddr) & PTE_ADDR_MASK;
-    pt.entries[ptIndex(vaddr)] = aligned_paddr | (flags & 0xFFF) | PTE_PRESENT;
+    pt.entries[ptIndex(vaddr)] = (@as(u64, paddr) & PTE_ADDR_MASK) | flags | PTE_PRESENT;
     invlpg(vaddr);
     return true;
 }
 
-pub fn unmapPage(pml4_phys: usize, vaddr: usize) void {
+pub fn unmapPage(pml4_phys: usize, vaddr: usize) ?usize {
+    std.debug.assert(vaddr % PAGE_SIZE == 0);
     const pml4 = @as(*PageTable, @ptrFromInt(pml4_phys));
     const pml4e = pml4.entries[pml4Index(vaddr)];
-    if ((pml4e & PTE_PRESENT) == 0) return;
+    if ((pml4e & PTE_PRESENT) == 0) return null;
     const pdpt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pml4e & PTE_ADDR_MASK))));
     const pdpte = pdpt.entries[pdptIndex(vaddr)];
-    if ((pdpte & PTE_PRESENT) == 0) return;
+    if ((pdpte & PTE_PRESENT) == 0) return null;
     const pd = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pdpte & PTE_ADDR_MASK))));
     const pde = pd.entries[pdIndex(vaddr)];
-    if ((pde & PTE_PRESENT) == 0) return;
+    if ((pde & PTE_PRESENT) == 0) return null;
     const pt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pde & PTE_ADDR_MASK))));
-    pt.entries[ptIndex(vaddr)] = 0;
+    const pt_entry = &pt.entries[ptIndex(vaddr)];
+    if ((pt_entry.* & PTE_PRESENT) == 0) return null;
+    const old_phys: usize = @intCast(pt_entry.* & PTE_ADDR_MASK);
+    pt_entry.* = 0;
     invlpg(vaddr);
+    return old_phys;
 }
 
 pub fn translate(pml4_phys: usize, vaddr: usize) ?usize {

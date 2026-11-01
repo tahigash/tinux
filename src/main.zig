@@ -24,6 +24,8 @@ const initramfs_archive: []const u8 = initramfs.data;
 
 comptime {
     std.testing.refAllDecls(idt);
+    std.testing.refAllDecls(vmm);
+    std.testing.refAllDecls(heap);
     std.testing.refAllDecls(syscall_arch);
     std.testing.refAllDecls(dispatch);
 }
@@ -77,7 +79,7 @@ pub const TaskId = enum {
 };
 
 /// Active milestone target. Update this single line to activate sequential suites:
-pub const CURRENT_TASK: TaskId = .TASK_002;
+pub const CURRENT_TASK: TaskId = .TASK_003;
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     serial.print("\n[TINUX_PANIC] {s}\n", .{msg});
@@ -109,6 +111,68 @@ fn runTask002() noreturn {
     const p3 = pmm.allocZeroedPage().?;
     std.debug.assert(p3 == p1);
     serial.writeString("[TINUX_TEST] PASS: TASK-002\n");
+    io.qemuExitSuccess();
+}
+
+fn runTask003() noreturn {
+    serial.init();
+    serial.writeString("[TINUX_TEST] START: TASK-003\n");
+
+    gdt.init();
+    idt.init();
+    pmm.init();
+
+    vmm.init();
+    serial.writeString("[TINUX_VMM] 4-level paging active (CR3 switched)\n");
+
+    const kpml4 = vmm.getKernelPml4Phys();
+
+    // NULL guard page translation returns null
+    std.debug.assert(vmm.translate(kpml4, 0x0000_0000) == null);
+
+    // Identity mapped address translation
+    std.debug.assert(vmm.translate(kpml4, 0x0010_0000).? == 0x0010_0000);
+
+    // Scratch virtual mapping test
+    const scratch_vaddr: usize = 0x2000_0000;
+    const test_phys = pmm.allocZeroedPage() orelse @panic("TASK-003: failed to allocate physical page");
+    std.debug.assert(vmm.mapPage(kpml4, scratch_vaddr, test_phys, vmm.PTE_PRESENT | vmm.PTE_WRITABLE));
+    std.debug.assert(vmm.translate(kpml4, scratch_vaddr).? == test_phys);
+
+    const scratch_ptr = @as(*volatile u64, @ptrFromInt(scratch_vaddr));
+    const magic_sig: u64 = 0xCAFE_BABE_DEAD_BEEF;
+    scratch_ptr.* = magic_sig;
+    std.debug.assert(scratch_ptr.* == magic_sig);
+
+    const phys_ptr = @as(*volatile u64, @ptrFromInt(test_phys));
+    std.debug.assert(phys_ptr.* == magic_sig);
+
+    _ = vmm.unmapPage(kpml4, scratch_vaddr);
+    std.debug.assert(vmm.translate(kpml4, scratch_vaddr) == null);
+    pmm.freePage(test_phys);
+
+    // Kernel heap verification
+    heap.init();
+    serial.writeString("[TINUX_HEAP] Kernel heap initialized\n");
+
+    const alloc = heap.allocator();
+    const slice1 = alloc.alloc(u64, 32) catch @panic("TASK-003: heap alloc failed");
+    for (slice1, 0..) |*item, idx| {
+        item.* = 0x1234_5678_0000_0000 | @as(u64, idx);
+    }
+    for (slice1, 0..) |item, idx| {
+        std.debug.assert(item == (0x1234_5678_0000_0000 | @as(u64, idx)));
+    }
+
+    const slice1_addr = @intFromPtr(slice1.ptr);
+    alloc.free(slice1);
+
+    const slice2 = alloc.alloc(u64, 32) catch @panic("TASK-003: heap realloc failed");
+    const slice2_addr = @intFromPtr(slice2.ptr);
+    std.debug.assert(slice2_addr == slice1_addr);
+    alloc.free(slice2);
+
+    serial.writeString("[TINUX_TEST] PASS: TASK-003\n");
     io.qemuExitSuccess();
 }
 
@@ -193,6 +257,7 @@ export fn kmain() callconv(.C) noreturn {
     switch (CURRENT_TASK) {
         .TASK_001 => runTask001(),
         .TASK_002 => runTask002(),
+        .TASK_003 => runTask003(),
         inline else => |t| runFullKernel(t),
     }
 }

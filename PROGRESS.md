@@ -11,7 +11,7 @@
 
 - [x] **TASK-001**: `docs/specs/SPEC_TASK_001.md`: x86_64 Minimal Boot (Xen PVH), COM1 Serial Console & QEMU Auto-Verification Harness
 - [x] **TASK-002**: `docs/specs/SPEC_TASK_002.md`: GDT/TSS Reconstruction, IDT Exception Handlers (176B TrapFrame), and Bitmap PMM
-- [ ] **TASK-003**: `docs/specs/SPEC_TASK_003.md`: 4-Level Page Table Manager (VMM) and `std.mem.Allocator` Kernel Heap
+- [x] **TASK-003**: `docs/specs/SPEC_TASK_003.md`: 4-Level Page Table Manager (VMM) and `std.mem.Allocator` Kernel Heap
 - [ ] **TASK-004**: `docs/specs/SPEC_TASK_004.md`: `SYSCALL`/`SYSRET` MSR Setup, Ring 3 Transition, and Minimal Syscall Dispatcher
 - [ ] **TASK-005**: `docs/specs/SPEC_TASK_005.md`: Static ELF64 Loader, System V AMD64 Stack (`auxv`), TLS (`arch_prctl`), and `sys_brk`
 - [ ] **TASK-006**: `docs/specs/SPEC_TASK_006.md`: In-Memory VFS, CPIO (`newc`) Initramfs Unpacker, and File I/O Syscalls
