@@ -10,9 +10,14 @@ const SOCK_STREAM: usize = 1;
 const SOL_SOCKET: usize = 1;
 const SO_REUSEADDR: usize = 2;
 
-const ECONNREFUSED: isize = -111;
+const EBADF: isize = -9;
+const EAGAIN: isize = -11;
 const EPIPE: isize = -32;
+const ENOTSOCK: isize = -88;
+const EOPNOTSUPP: isize = -95;
 const EAFNOSUPPORT: isize = -97;
+const EADDRINUSE: isize = -98;
+const ECONNREFUSED: isize = -111;
 
 const SockAddrIn = extern struct {
     sin_family: u16 = 2,
@@ -80,6 +85,20 @@ inline fn syscall5(num: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: u
           [a3] "{rdx}" (a3),
           [a4] "{r10}" (a4),
           [a5] "{r8}" (a5),
+        : "rcx", "r11", "memory"
+    );
+}
+
+inline fn syscall6(num: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize, a6: usize) isize {
+    return asm volatile ("syscall"
+        : [ret] "={rax}" (-> isize),
+        : [num] "{rax}" (num),
+          [a1] "{rdi}" (a1),
+          [a2] "{rsi}" (a2),
+          [a3] "{rdx}" (a3),
+          [a4] "{r10}" (a4),
+          [a5] "{r8}" (a5),
+          [a6] "{r9}" (a6),
         : "rcx", "r11", "memory"
     );
 }
@@ -260,43 +279,228 @@ fn challengeAcceptQueueStress() void {
 }
 
 // ----------------------------------------------------------------------------
-// CHALLENGE 3: Edge Cases (Invalid domain, Refused port, EPIPE)
+// CHALLENGE 3: Edge Cases (Invalid domains, socketpair, bind collision, EPIPE, buffer limits)
 // ----------------------------------------------------------------------------
 fn challengeEdgeCases() void {
-    writeStdout("[CHALLENGER] Testing socket edge cases (EAFNOSUPPORT, ECONNREFUSED, EPIPE)...\n");
+    writeStdout("[CHALLENGER] Testing socket edge cases (EAFNOSUPPORT, EOPNOTSUPP, ECONNREFUSED, EADDRINUSE, EPIPE, buffer limits)...\n");
 
-    // 1. Invalid domain (AF_IPX = 4) -> -EAFNOSUPPORT (-97)
-    const bad_dom = syscall3(41, 4, SOCK_STREAM, 0);
-    if (bad_dom != EAFNOSUPPORT) {
-        exitFail(30, "invalid domain did not return -EAFNOSUPPORT");
+    // 1-3. Invalid domains (AF_APPLETALK=5, AF_INET6=10, 9999) -> -EAFNOSUPPORT (-97)
+    if (syscall3(41, 5, SOCK_STREAM, 0) != EAFNOSUPPORT) {
+        exitFail(301, "AF_APPLETALK did not return -EAFNOSUPPORT");
+    }
+    if (syscall3(41, 10, SOCK_STREAM, 0) != EAFNOSUPPORT) {
+        exitFail(302, "AF_INET6 did not return -EAFNOSUPPORT");
+    }
+    if (syscall3(41, 9999, SOCK_STREAM, 0) != EAFNOSUPPORT) {
+        exitFail(303, "domain 9999 did not return -EAFNOSUPPORT");
     }
 
-    // 2. Connect to closed port 12345 -> -ECONNREFUSED (-111)
+    // 4. socketpair with AF_INET -> -EOPNOTSUPP (-95)
+    var sv_inet: [2]i32 = .{ -1, -1 };
+    if (syscall4(53, AF_INET, SOCK_STREAM, 0, @intFromPtr(&sv_inet)) != EOPNOTSUPP) {
+        exitFail(304, "sys_socketpair(AF_INET) did not return -EOPNOTSUPP");
+    }
+
+    // 5. Connect to closed port 29999 -> -ECONNREFUSED (-111)
     const dead_sock = syscall3(41, AF_INET, SOCK_STREAM, 0);
     var dead_addr = SockAddrIn{
         .sin_family = 2,
-        .sin_port = std.mem.nativeToBig(u16, 12345),
+        .sin_port = std.mem.nativeToBig(u16, 29999),
         .sin_addr = 0x0100007F,
     };
     const ref_ret = syscall3(42, @intCast(dead_sock), @intFromPtr(&dead_addr), @sizeOf(SockAddrIn));
     if (ref_ret != ECONNREFUSED) {
-        exitFail(31, "connect to dead port did not return -ECONNREFUSED");
+        exitFail(305, "connect to dead port did not return -ECONNREFUSED");
     }
     _ = syscall1(3, @intCast(dead_sock));
 
-    // 3. EPIPE on writing to closed peer
-    var pair: [2]i32 = .{ -1, -1 };
-    _ = syscall4(53, AF_UNIX, SOCK_STREAM, 0, @intFromPtr(&pair));
-    // Close receiver pair[1]
-    _ = syscall1(3, @intCast(pair[1]));
-    // Write on sender pair[0] -> must fail with -EPIPE (-32)
-    const pipe_ret = syscall3(1, @intCast(pair[0]), @intFromPtr("X".ptr), 1);
-    if (pipe_ret != EPIPE) {
-        exitFail(32, "write to closed peer did not return -EPIPE");
+    // 6-7. Duplicate sys_bind on port 17777 without SO_REUSEADDR -> -EADDRINUSE (-98)
+    const b1 = syscall3(41, AF_INET, SOCK_STREAM, 0);
+    const b2 = syscall3(41, AF_INET, SOCK_STREAM, 0);
+    var b_addr = SockAddrIn{
+        .sin_family = 2,
+        .sin_port = std.mem.nativeToBig(u16, 17777),
+        .sin_addr = 0x0100007F,
+    };
+    if (syscall3(49, @intCast(b1), @intFromPtr(&b_addr), @sizeOf(SockAddrIn)) != 0) {
+        exitFail(306, "initial sys_bind failed");
     }
-    _ = syscall1(3, @intCast(pair[0]));
+    if (syscall3(49, @intCast(b2), @intFromPtr(&b_addr), @sizeOf(SockAddrIn)) != EADDRINUSE) {
+        exitFail(307, "duplicate sys_bind did not return -EADDRINUSE");
+    }
+    _ = syscall1(3, @intCast(b1));
+    _ = syscall1(3, @intCast(b2));
+
+    // 8-9. Zero-byte operations on connected socketpair -> 0
+    var pair0: [2]i32 = .{ -1, -1 };
+    _ = syscall4(53, AF_UNIX, SOCK_STREAM, 0, @intFromPtr(&pair0));
+    var zero_buf: [1]u8 = undefined;
+    if (syscall6(44, @intCast(pair0[0]), @intFromPtr(&zero_buf), 0, 0, 0, 0) != 0) {
+        exitFail(308, "zero-length sendto did not return 0");
+    }
+    if (syscall6(45, @intCast(pair0[1]), @intFromPtr(&zero_buf), 0, 0, 0, 0) != 0) {
+        exitFail(309, "zero-length recvfrom did not return 0");
+    }
+
+    // 10-11. Buffer saturation & partial write (>4096 bytes write)
+    var large_tx: [5000]u8 = undefined;
+    @memset(&large_tx, 0x55);
+    const w_large = syscall6(44, @intCast(pair0[0]), @intFromPtr(&large_tx), large_tx.len, 0, 0, 0);
+    if (w_large != 4096) {
+        exitFail(310, "large sendto did not return 4096 partial write");
+    }
+    // Writing to completely full buffer must return -EAGAIN (-11)
+    const w_full = syscall6(44, @intCast(pair0[0]), @intFromPtr(&large_tx), 10, 0, 0, 0);
+    if (w_full != EAGAIN) {
+        exitFail(311, "sendto on saturated buffer did not return -EAGAIN");
+    }
+
+    // Drain buffer
+    var drain_buf: [4096]u8 = undefined;
+    _ = syscall3(0, @intCast(pair0[1]), @intFromPtr(&drain_buf), drain_buf.len);
+
+    // 12-13. EPIPE on writing to closed peer (both sys_sendto and sys_write)
+    _ = syscall1(3, @intCast(pair0[1]));
+    const sendto_pipe = syscall6(44, @intCast(pair0[0]), @intFromPtr("X".ptr), 1, 0, 0, 0);
+    if (sendto_pipe != EPIPE) {
+        exitFail(312, "sys_sendto to closed peer did not return -EPIPE");
+    }
+    const write_pipe = syscall3(1, @intCast(pair0[0]), @intFromPtr("X".ptr), 1);
+    if (write_pipe != EPIPE) {
+        exitFail(313, "sys_write to closed peer did not return -EPIPE");
+    }
+    _ = syscall1(3, @intCast(pair0[0]));
 
     writeStdout("[CHALLENGER] All socket edge cases verified!\n");
+}
+
+// ----------------------------------------------------------------------------
+// CHALLENGE 4: Non-Socket Descriptors (-ENOTSOCK) and Invalid FDs (-EBADF)
+// ----------------------------------------------------------------------------
+fn challengeNonSocketAndInvalidFds() void {
+    writeStdout("[CHALLENGER] Testing socket syscalls on non-socket and invalid FDs...\n");
+
+    var pfd: [2]i32 = .{ -1, -1 };
+    if (syscall2(293, @intFromPtr(&pfd), 0) != 0) {
+        exitFail(400, "pipe2 failed");
+    }
+    const pipe_read: usize = @intCast(pfd[0]);
+    const pipe_write: usize = @intCast(pfd[1]);
+
+    var sin: SockAddrIn = .{
+        .sin_family = 2,
+        .sin_port = std.mem.nativeToBig(u16, 8080),
+        .sin_addr = 0x0100007F,
+    };
+    var sin_len: u32 = @sizeOf(SockAddrIn);
+    var optval: i32 = 1;
+    var optlen: u32 = 4;
+    var dummy_buf: [16]u8 = undefined;
+
+    // 1. sys_accept(43) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall3(43, pipe_read, @intFromPtr(&sin), @intFromPtr(&sin_len)) != ENOTSOCK) {
+        exitFail(401, "sys_accept on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 2. sys_connect(42) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall3(42, pipe_read, @intFromPtr(&sin), sin_len) != ENOTSOCK) {
+        exitFail(402, "sys_connect on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 3. sys_sendto(44) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall6(44, pipe_read, @intFromPtr(&dummy_buf), 1, 0, 0, 0) != ENOTSOCK) {
+        exitFail(403, "sys_sendto on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 4. sys_recvfrom(45) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall6(45, pipe_read, @intFromPtr(&dummy_buf), 1, 0, 0, 0) != ENOTSOCK) {
+        exitFail(404, "sys_recvfrom on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 5. sys_bind(49) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall3(49, pipe_read, @intFromPtr(&sin), sin_len) != ENOTSOCK) {
+        exitFail(405, "sys_bind on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 6. sys_listen(50) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall2(50, pipe_read, 4) != ENOTSOCK) {
+        exitFail(406, "sys_listen on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 7. sys_shutdown(48) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall2(48, pipe_read, 2) != ENOTSOCK) {
+        exitFail(407, "sys_shutdown on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 8. sys_getsockname(51) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall3(51, pipe_read, @intFromPtr(&sin), @intFromPtr(&sin_len)) != ENOTSOCK) {
+        exitFail(408, "sys_getsockname on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 9. sys_getpeername(52) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall3(52, pipe_read, @intFromPtr(&sin), @intFromPtr(&sin_len)) != ENOTSOCK) {
+        exitFail(409, "sys_getpeername on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 10. sys_setsockopt(54) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall5(54, pipe_read, 1, 2, @intFromPtr(&optval), 4) != ENOTSOCK) {
+        exitFail(410, "sys_setsockopt on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 11. sys_getsockopt(55) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall5(55, pipe_read, 1, 2, @intFromPtr(&optval), @intFromPtr(&optlen)) != ENOTSOCK) {
+        exitFail(411, "sys_getsockopt on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 12. sys_accept4(288) on open pipe FD -> MUST return -ENOTSOCK (-88)
+    if (syscall4(288, pipe_read, @intFromPtr(&sin), @intFromPtr(&sin_len), 0) != ENOTSOCK) {
+        exitFail(412, "sys_accept4 on pipe FD did not return -ENOTSOCK");
+    }
+
+    // 13. Also verify stdout (fd 1) returns -ENOTSOCK (-88)
+    if (syscall2(50, 1, 4) != ENOTSOCK) {
+        exitFail(413, "sys_listen on stdout FD 1 did not return -ENOTSOCK");
+    }
+
+    _ = syscall1(3, pipe_read);
+    _ = syscall1(3, pipe_write);
+
+    // 14-23. Invalid and unused descriptors -> MUST return -EBADF (-9)
+    const bad_fds = [_]usize{ ~@as(usize, 0), 60, 1024 };
+    for (bad_fds) |bad_fd| {
+        if (syscall2(50, bad_fd, 4) != EBADF) {
+            exitFail(414, "sys_listen on invalid FD did not return -EBADF");
+        }
+        if (syscall3(42, bad_fd, @intFromPtr(&sin), sin_len) != EBADF) {
+            exitFail(415, "sys_connect on invalid FD did not return -EBADF");
+        }
+        if (syscall3(43, bad_fd, @intFromPtr(&sin), @intFromPtr(&sin_len)) != EBADF) {
+            exitFail(416, "sys_accept on invalid FD did not return -EBADF");
+        }
+        if (syscall6(44, bad_fd, @intFromPtr(&dummy_buf), 1, 0, 0, 0) != EBADF) {
+            exitFail(417, "sys_sendto on invalid FD did not return -EBADF");
+        }
+        if (syscall6(45, bad_fd, @intFromPtr(&dummy_buf), 1, 0, 0, 0) != EBADF) {
+            exitFail(418, "sys_recvfrom on invalid FD did not return -EBADF");
+        }
+        if (syscall3(49, bad_fd, @intFromPtr(&sin), sin_len) != EBADF) {
+            exitFail(419, "sys_bind on invalid FD did not return -EBADF");
+        }
+        if (syscall2(48, bad_fd, 2) != EBADF) {
+            exitFail(420, "sys_shutdown on invalid FD did not return -EBADF");
+        }
+        if (syscall3(51, bad_fd, @intFromPtr(&sin), @intFromPtr(&sin_len)) != EBADF) {
+            exitFail(421, "sys_getsockname on invalid FD did not return -EBADF");
+        }
+        if (syscall3(52, bad_fd, @intFromPtr(&sin), @intFromPtr(&sin_len)) != EBADF) {
+            exitFail(422, "sys_getpeername on invalid FD did not return -EBADF");
+        }
+        if (syscall5(54, bad_fd, 1, 2, @intFromPtr(&optval), 4) != EBADF) {
+            exitFail(423, "sys_setsockopt on invalid FD did not return -EBADF");
+        }
+    }
+
+    writeStdout("[CHALLENGER] Non-socket descriptors (-ENOTSOCK) & invalid descriptors (-EBADF) verified!\n");
 }
 
 export fn challengerMain(_: [*]const u64) callconv(.C) noreturn {
@@ -304,9 +508,11 @@ export fn challengerMain(_: [*]const u64) callconv(.C) noreturn {
     challengeSocketpairFullDuplex();
     challengeAcceptQueueStress();
     challengeEdgeCases();
+    challengeNonSocketAndInvalidFds();
     writeStdout("[CHALLENGER_PASS] All TASK-013 adversarial challenges passed cleanly!\n");
     _ = syscall1(231, 0);
     unreachable;
 }
+
 
 pub fn main() void {}
