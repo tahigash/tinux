@@ -1,0 +1,144 @@
+name: CI - Tinux Kernel Quality & License Guardrails
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guardrails:
+    name: License, Clean-Room & Spec Guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Clean-Room License & Binary Guardrails
+        run: |
+          python scripts/check_license_guardrails.py
+
+      - name: ASCII & Humanizer Integrity Check
+        run: |
+          python scripts/check_ascii_integrity.py
+
+      - name: Specification Integrity Check (TASK-001..020)
+        run: |
+          bash scripts/check_specs.sh
+
+  build:
+    name: Kernel Compilation (Zig 0.13.0)
+    needs: guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Build Default Kernel (TASK-006)
+        run: |
+          zig build
+
+      - name: Build Interactive Kernel (TASK-012)
+        run: |
+          zig build -Dtask=TASK-012
+
+      - name: Build Persistent Storage Kernel (TASK-016)
+        run: |
+          zig build -Dtask=TASK-016
+
+      - name: Build SMP Multi-Core Kernel (TASK-020)
+        run: |
+          zig build -Dtask=TASK-020
+
+  qemu-tests:
+    name: QEMU Automated Verification
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install QEMU and CPIO
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 cpio
+
+      - name: Pre-Flight Environment Validation
+        run: |
+          bash scripts/preflight_check.sh
+
+      - name: Verify TASK-001 (PVH Direct Boot & COM1 UART)
+        run: bash scripts/verify_qemu.sh TASK-001 15
+
+      - name: Verify TASK-002 (GDT/TSS, IDT 176B TrapFrame & PMM)
+        run: bash scripts/verify_qemu.sh TASK-002 15
+
+      - name: Verify TASK-003 (4-Level VMM & Kernel Heap)
+        run: bash scripts/verify_qemu.sh TASK-003 15
+
+      - name: Verify TASK-004 (SYSCALL/SYSRET MSRs & Ring 3 Entry)
+        run: bash scripts/verify_qemu.sh TASK-004 15
+
+      - name: Verify TASK-006 (VFS & SVR4 Initramfs Execution)
+        run: bash scripts/verify_qemu.sh TASK-006 15
+
+      - name: Verify TASK-008 (Pipes, dup2 & /proc Pseudo-FS)
+        run: bash scripts/verify_qemu.sh TASK-008 15
+
+      - name: Verify TASK-012 (TTY Line Discipline & Interactive Shell)
+        run: bash scripts/verify_qemu.sh TASK-012 15
+
+      - name: Verify TASK-015 (VirtIO-Block PCI DMA Persistence)
+        run: bash scripts/verify_qemu.sh TASK-015 15
+
+      - name: Verify TASK-016 (Persistent USTAR tarfs Mount & Sync)
+        run: bash scripts/verify_qemu.sh TASK-016 15
+
+      - name: Verify TASK-017 (VirtIO-Net PCI Network Driver & Ping)
+        run: bash scripts/verify_qemu.sh TASK-017 15
+
+      - name: Verify TASK-019 (UDP Socket Stack & RFC 1035 DNS)
+        run: bash scripts/verify_qemu.sh TASK-019 15
+
+      - name: Verify TASK-020 (SMP Multi-Core APIC INIT-SIPI-SIPI Boot)
+        run: bash scripts/verify_qemu.sh TASK-020 15
+
+  ci-gate:
+    name: Quality Gate (All Checks Passed)
+    needs: [guardrails, build, qemu-tests]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check Overall Status
+        run: |
+          if [ "${{ needs.guardrails.result }}" != "success" ] || \
+             [ "${{ needs.build.result }}" != "success" ] || \
+             [ "${{ needs.qemu-tests.result }}" != "success" ]; then
+            echo "[ERROR] One or more quality gate jobs failed."
+            exit 1
+          fi
+          echo "[SUCCESS] All Tinux kernel guardrails, builds, and QEMU tests passed cleanly."
