@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "tinux-abi-inspector": {
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/tools/tinux_abi_mcp.py",
+        "--mcp"
+      ]
+    }
+  }
+}

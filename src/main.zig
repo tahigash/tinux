@@ -1,0 +1,120 @@
+const std = @import("std");
+const serial = @import("drivers/serial.zig");
+const io = @import("arch/x86_64/io.zig");
+const gdt = @import("arch/x86_64/gdt.zig");
+const idt = @import("arch/x86_64/idt.zig");
+const pmm = @import("mm/pmm.zig");
+const vmm = @import("mm/vmm.zig");
+const heap = @import("mm/heap.zig");
+const syscall_arch = @import("arch/x86_64/syscall.zig");
+const timer = @import("drivers/timer.zig");
+const vfs = @import("fs/vfs.zig");
+const cpio = @import("fs/cpio.zig");
+const pipe_mod = @import("fs/pipe.zig");
+const procfs = @import("fs/procfs.zig");
+const tty = @import("drivers/tty.zig");
+const socket = @import("net/socket.zig");
+const elf = @import("proc/elf.zig");
+const task = @import("proc/task.zig");
+const dispatch = @import("syscall/dispatch.zig");
+
+// Embedded initramfs archive provided via build system (.cache/initramfs.cpio)
+const initramfs = @import("initramfs");
+const initramfs_archive: []const u8 = initramfs.data;
+
+export var boot_stack: [65536]u8 align(16) = undefined;
+
+export fn _start() callconv(.Naked) noreturn {
+    asm volatile (
+        \\ leaq boot_stack + 65536(%rip), %rsp
+        \\ andq $-16, %rsp
+        \\ call kmain
+    );
+    while (true) {
+        asm volatile ("hlt");
+    }
+}
+
+pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    _ = error_return_trace;
+    _ = ret_addr;
+    serial.print("\n[KERNEL PANIC] {s}\n", .{msg});
+    io.qemuExitFailure();
+}
+
+export fn kmain() noreturn {
+    serial.init();
+    serial.writeString("[TINUX_BOOT] Booting Tinux Kernel...\n");
+
+    gdt.init();
+    serial.writeString("[TINUX_GDT] GDT and 64-bit TSS loaded\n");
+
+    idt.init();
+    serial.writeString("[TINUX_IDT] IDT loaded (vectors 0..31)\n");
+
+    pmm.init();
+    vmm.init();
+    serial.writeString("[TINUX_VMM] 4-level page table manager & CR3 switch verified\n");
+
+    heap.init();
+    serial.writeString("[TINUX_HEAP] std.mem.Allocator kernel heap & coalescing verified\n");
+
+    syscall_arch.init();
+    serial.writeString("[TINUX_SYSCALL] MSRs (EFER.SCE, STAR, LSTAR, FMASK) configured\n");
+
+    timer.init();
+    serial.writeString("[TINUX_TIMER] 8259A PIC & 8254 PIT (100Hz) initialized\n");
+
+    vfs.init();
+    pipe_mod.init();
+    procfs.initAndRegister();
+
+    tty.init();
+    serial.writeString("[TINUX_TTY] 16550A UART IRQ4 & POSIX line discipline initialized\n");
+
+    socket.init();
+
+    // Unpack CPIO archive
+    if (initramfs_archive.len > 0) {
+        const unpacked = cpio.unpackInitramfs(initramfs_archive);
+        serial.print("[TINUX_VFS] Unpacked {d} nodes from initramfs.cpio\n", .{unpacked});
+    }
+
+    dispatch.setCurrentTestName("TASK-013");
+
+    // Look for init binary or shell
+    var init_binary_data: ?[]const u8 = null;
+    var init_binary_name: []const u8 = "bin/sh";
+
+    if (vfs.lookup("bin/sh")) |idx| {
+        init_binary_data = vfs.getNode(idx).slice();
+        init_binary_name = "/bin/sh";
+    } else if (vfs.lookup("bin/busybox")) |idx| {
+        init_binary_data = vfs.getNode(idx).slice();
+        init_binary_name = "/bin/busybox";
+    }
+
+    if (init_binary_data) |raw_elf| {
+        const pid1_pml4 = vmm.createFreshUserPml4() orelse @panic("Failed to allocate PID 1 PML4");
+        const argv = [_][]const u8{ init_binary_name, "/etc/rc.sh" };
+        const envp = [_][]const u8{ "PATH=/bin", "HOME=/", "TERM=vt100" };
+
+        const loaded = elf.loadStaticElf(pid1_pml4, raw_elf, &argv, &envp) catch |err| {
+            serial.print("ELF load error: {}\n", .{err});
+            @panic("Failed to load init ELF binary");
+        };
+
+        const pid1_task = task.initPid1(pid1_pml4, loaded.initial_brk, init_binary_name);
+        _ = pid1_task;
+
+        serial.print("[TINUX_INIT] Spawning PID 1 ({s} /etc/rc.sh)...\n", .{init_binary_name});
+        syscall_arch.enterUserMode(loaded.entry_rip, loaded.user_rsp);
+    } else {
+        serial.writeString("[TINUX_INIT] No userland binary found in initramfs.cpio\n");
+        io.qemuExitSuccess();
+    }
+
+    while (true) {
+        asm volatile ("hlt");
+    }
+}
