@@ -79,7 +79,7 @@ pub const TaskId = enum {
 };
 
 /// Active milestone target. Update this single line to activate sequential suites:
-pub const CURRENT_TASK: TaskId = .TASK_003;
+pub const CURRENT_TASK: TaskId = .TASK_004;
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     serial.print("\n[TINUX_PANIC] {s}\n", .{msg});
@@ -231,6 +231,64 @@ fn runTask003() noreturn {
     io.qemuExitSuccess();
 }
 
+const USER_TEST_PAYLOAD = [_]u8{
+    // movq $39, %rax; syscall; cmpq $1, %rax; jne .Lfail_getpid (+0x30 bytes)
+    0x48, 0xC7, 0xC0, 0x27, 0x00, 0x00, 0x00, 0x0F, 0x05, 0x48, 0x83, 0xF8, 0x01, 0x75, 0x30,
+    // movq $1, %rax; movq $1, %rdi; leaq msg(%rip), %rsi; movq $44, %rdx; syscall; cmpq $44, %rax; jne .Lfail_write (+0x1C bytes)
+    0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00,
+    0x48, 0x8D, 0x35, 0x3B, 0x00, 0x00, 0x00, 0x48, 0xC7, 0xC2, 0x2C, 0x00, 0x00, 0x00,
+    0x0F, 0x05, 0x48, 0x83, 0xF8, 0x2C, 0x75, 0x1C,
+    // movq $60, %rax; xorq %rdi, %rdi; syscall
+    0x48, 0xC7, 0xC0, 0x3C, 0x00, 0x00, 0x00, 0x48, 0x31, 0xFF, 0x0F, 0x05,
+    // .Lfail_getpid: movq $60, %rax; movq $1, %rdi; syscall
+    0x48, 0xC7, 0xC0, 0x3C, 0x00, 0x00, 0x00, 0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x05,
+    // .Lfail_write: movq $60, %rax; movq $2, %rdi; syscall
+    0x48, 0xC7, 0xC0, 0x3C, 0x00, 0x00, 0x00, 0x48, 0xC7, 0xC7, 0x02, 0x00, 0x00, 0x00, 0x0F, 0x05,
+    // msg: "[TINUX_USER] Hello from Ring 3 via SYSCALL!\n"
+    0x5B, 0x54, 0x49, 0x4E, 0x55, 0x58, 0x5F, 0x55, 0x53, 0x45, 0x52, 0x5D, 0x20, 0x48, 0x65, 0x6C,
+    0x6C, 0x6F, 0x20, 0x66, 0x72, 0x6F, 0x6D, 0x20, 0x52, 0x69, 0x6E, 0x67, 0x20, 0x33, 0x20, 0x76,
+    0x69, 0x61, 0x20, 0x53, 0x59, 0x53, 0x43, 0x41, 0x4C, 0x4C, 0x21, 0x0A,
+};
+
+fn runTask004() noreturn {
+    serial.init();
+    serial.writeString("[TINUX_TEST] START: TASK-004\n");
+
+    gdt.init();
+    idt.init();
+    // Mask legacy 8259A PIC interrupts until remapped in TASK-010
+    io.outb(0x21, 0xFF);
+    io.outb(0xA1, 0xFF);
+    pmm.init();
+    vmm.init();
+    heap.init();
+    syscall_arch.init();
+    serial.writeString("[TINUX_SYSCALL] MSRs initialized\n");
+
+    const kpml4 = vmm.getKernelPml4Phys();
+    _ = task.initPid1(kpml4, 0, "task004");
+
+    // Map user code page at 0x0040_0000 (4 KiB)
+    const code_vaddr: usize = 0x0040_0000;
+    const code_phys = pmm.allocZeroedPage() orelse @panic("TASK-004: failed to alloc user code page");
+    std.debug.assert(vmm.mapPage(kpml4, code_vaddr, code_phys, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER));
+
+    // Copy user test payload into code page
+    const code_dst = @as([*]u8, @ptrFromInt(code_phys))[0..USER_TEST_PAYLOAD.len];
+    @memcpy(code_dst, &USER_TEST_PAYLOAD);
+
+    // Map 2 user stack pages at 0x0080_0000 and 0x0080_1000 (8 KiB)
+    const stack_phys1 = pmm.allocZeroedPage() orelse @panic("TASK-004: failed to alloc user stack page 1");
+    const stack_phys2 = pmm.allocZeroedPage() orelse @panic("TASK-004: failed to alloc user stack page 2");
+    std.debug.assert(vmm.mapPage(kpml4, 0x0080_0000, stack_phys1, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER));
+    std.debug.assert(vmm.mapPage(kpml4, 0x0080_1000, stack_phys2, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER));
+
+    serial.writeString("[TINUX_USER] Entering Ring 3...\n");
+
+    // Enter Ring 3
+    syscall_arch.enterUserMode(code_vaddr, 0x0080_2000);
+}
+
 fn runFullKernel(target_task: TaskId) noreturn {
 
     gdt.init();
@@ -313,6 +371,7 @@ export fn kmain() callconv(.C) noreturn {
         .TASK_001 => runTask001(),
         .TASK_002 => runTask002(),
         .TASK_003 => runTask003(),
+        .TASK_004 => runTask004(),
         inline else => |t| runFullKernel(t),
     }
 }

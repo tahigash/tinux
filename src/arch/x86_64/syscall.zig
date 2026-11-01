@@ -82,5 +82,5 @@ pub fn init() void {
     const star: u64 = (@as(u64, 0x0010) << 48) | (@as(u64, 0x0008) << 32);
     wrmsr(MSR_STAR, star);
     wrmsr(MSR_LSTAR, @intFromPtr(&syscallEntry));
-    wrmsr(MSR_FMASK, 0x0000_0300);
+    wrmsr(MSR_FMASK, 0x0000_0004_0700);
 }
