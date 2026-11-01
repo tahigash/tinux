@@ -30,7 +30,8 @@ pub const AT_EGID: u64 = 14;
 pub const AT_SECURE: u64 = 23;
 pub const AT_RANDOM: u64 = 25;
 
-// User Stack Dimensions (TASK-005: 16 KiB Stack)
+// User Space Boundaries & Stack Dimensions (TASK-005: 16 KiB Stack)
+pub const USER_ADDR_MAX: usize = 0x0000_8000_0000_0000;
 pub const USER_STACK_TOP: usize = 0x0080_4000;
 pub const USER_STACK_PAGES: usize = 4; // 16 KiB
 pub const USER_STACK_BOTTOM: usize = USER_STACK_TOP - (USER_STACK_PAGES * vmm.PAGE_SIZE); // 0x0080_0000
@@ -188,13 +189,15 @@ fn loadStaticElfInternal(
     custom_argv: ?[]const []const u8,
     custom_envp: ?[]const []const u8,
 ) LoadError!LoadedImage {
-    // 1. ELF Header Validation
+    // 1. ELF Header Validation (SPEC_TASK_005 Section 3.1 Item 1)
     if (elf_bytes.len < @sizeOf(Elf64_Ehdr)) return error.InvalidElfMagic;
     const ehdr = @as(*align(1) const Elf64_Ehdr, @ptrCast(elf_bytes.ptr));
     if (!std.mem.eql(u8, ehdr.e_ident[0..4], "\x7FELF")) return error.InvalidElfMagic;
-    if (ehdr.e_ident[4] != 2 or ehdr.e_ident[5] != 1 or ehdr.e_machine != EM_X86_64) {
+    if (ehdr.e_ident[4] != 2 or ehdr.e_ident[5] != 1 or ehdr.e_type != ET_EXEC or ehdr.e_machine != EM_X86_64) {
         return error.UnsupportedArchitecture;
     }
+    if (ehdr.e_entry >= USER_ADDR_MAX) return error.UnsupportedArchitecture;
+    if (ehdr.e_phentsize < @sizeOf(Elf64_Phdr)) return error.InvalidSegment;
 
     var max_vaddr: usize = 0;
     var phdr_vaddr: usize = 0;
@@ -207,15 +210,24 @@ fn loadStaticElfInternal(
         const phdr = @as(*align(1) const Elf64_Phdr, @ptrCast(elf_bytes.ptr + off));
 
         if (phdr.p_type == PT_LOAD and phdr.p_memsz > 0) {
+            // Validate segment filesz does not exceed memsz
+            if (phdr.p_filesz > phdr.p_memsz) return error.InvalidSegment;
+
             const seg_start = @as(usize, @intCast(phdr.p_vaddr));
             const seg_memsz = @as(usize, @intCast(phdr.p_memsz));
             const seg_filesz = @as(usize, @intCast(phdr.p_filesz));
+
+            // Validate segment bounds do not overflow or exceed USER_ADDR_MAX
+            if (seg_start >= USER_ADDR_MAX or seg_memsz > USER_ADDR_MAX - seg_start) {
+                return error.InvalidSegment;
+            }
             const seg_end = seg_start + seg_memsz;
             if (seg_end > max_vaddr) max_vaddr = seg_end;
 
             // Non-page-aligned segment boundary calculation
             const seg_page_start = seg_start & ~@as(usize, 0xFFF);
             const seg_page_end = std.mem.alignForward(usize, seg_end, 4096);
+            if (seg_page_end > USER_ADDR_MAX) return error.InvalidSegment;
 
             var page_vaddr = seg_page_start;
             while (page_vaddr < seg_page_end) : (page_vaddr += 4096) {
@@ -228,9 +240,24 @@ fn loadStaticElfInternal(
             // Copy file payload (remaining bytes up to seg_memsz remain zeroed from allocZeroedPage)
             if (seg_filesz > 0) {
                 const p_off = @as(usize, @intCast(phdr.p_offset));
-                if (p_off + seg_filesz > elf_bytes.len) return error.InvalidSegment;
+                if (p_off > elf_bytes.len or seg_filesz > elf_bytes.len - p_off) return error.InvalidSegment;
                 if (!writeToUserVaddr(pml4_phys, seg_start, elf_bytes[p_off .. p_off + seg_filesz])) {
                     return error.OutOfMemory;
+                }
+            }
+
+            // Zero partial BSS page tail if memsz > filesz and start of BSS is on an existing page
+            if (seg_memsz > seg_filesz) {
+                const bss_start = seg_start + seg_filesz;
+                const partial_len = @min(seg_end - bss_start, 4096 - (bss_start & 0xFFF));
+                if (partial_len > 0) {
+                    const zeros = [_]u8{0} ** 512;
+                    var off_z: usize = 0;
+                    while (off_z < partial_len) {
+                        const chunk = @min(partial_len - off_z, zeros.len);
+                        _ = writeToUserVaddr(pml4_phys, bss_start + off_z, zeros[0..chunk]);
+                        off_z += chunk;
+                    }
                 }
             }
 
@@ -314,43 +341,38 @@ fn loadStaticElfInternal(
         _ = writeToUserVaddr(pml4_phys, rsp_start, &slot_bytes);
         break :blk rsp_start;
     } else blk: {
-        // Dynamic Stack Layout for custom argv / envp
+        // Dynamic Stack Layout for arbitrary argv / envp without temporary heap buffers
         const argv = custom_argv.?;
         const envp = custom_envp.?;
         var cur_sp = USER_STACK_TOP;
 
-        var argv_vaddrs: [16]usize = undefined;
-        var envp_vaddrs: [16]usize = undefined;
-
-        for (envp, 0..) |e, idx| {
+        // Pass 1: Write envp strings downwards from USER_STACK_TOP
+        for (envp) |e| {
+            if (cur_sp < USER_STACK_BOTTOM + e.len + 1) return error.OutOfMemory;
             cur_sp -= (e.len + 1);
             _ = writeToUserVaddr(pml4_phys, cur_sp, e);
             _ = writeToUserVaddr(pml4_phys, cur_sp + e.len, "\x00");
-            if (idx < 16) envp_vaddrs[idx] = cur_sp;
         }
 
-        for (argv, 0..) |a, idx| {
+        // Pass 1 (cont): Write argv strings downwards
+        for (argv) |a| {
+            if (cur_sp < USER_STACK_BOTTOM + a.len + 1) return error.OutOfMemory;
             cur_sp -= (a.len + 1);
             _ = writeToUserVaddr(pml4_phys, cur_sp, a);
             _ = writeToUserVaddr(pml4_phys, cur_sp + a.len, "\x00");
-            if (idx < 16) argv_vaddrs[idx] = cur_sp;
         }
 
+        // Write 16-byte random seed for AT_RANDOM
+        if (cur_sp < USER_STACK_BOTTOM + 16) return error.OutOfMemory;
         cur_sp -= 16;
         const at_random_vaddr = cur_sp;
         const random_seed = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
         _ = writeToUserVaddr(pml4_phys, at_random_vaddr, &random_seed);
 
+        // Align string & data area to 16-byte boundary
         cur_sp &= ~@as(usize, 0xF);
 
-        const auxv_entries: usize = 12 * 2;
-        const total_u64 = 1 + (argv.len + 1) + (envp.len + 1) + auxv_entries;
-        if ((total_u64 % 2) != 0) {
-            cur_sp -= 8;
-        }
-
-        cur_sp -= auxv_entries * 8;
-        const auxv_sp = cur_sp;
+        // Auxiliary vector definition (13 pairs = 26 u64 words)
         const auxv_data = [_]u64{
             AT_PHDR, phdr_vaddr,
             AT_PHENT, @as(u64, ehdr.e_phentsize),
@@ -366,31 +388,61 @@ fn loadStaticElfInternal(
             AT_RANDOM, at_random_vaddr,
             AT_NULL, 0,
         };
+        const auxv_entries: usize = auxv_data.len;
+
+        // Calculate total words below string area to maintain 16-byte RSP alignment
+        const total_u64 = 1 + (argv.len + 1) + (envp.len + 1) + auxv_entries;
+        if ((total_u64 % 2) != 0) {
+            if (cur_sp < USER_STACK_BOTTOM + 8) return error.OutOfMemory;
+            cur_sp -= 8;
+        }
+
+        // Auxiliary vector table placement
+        const auxv_bytes_len = auxv_entries * 8;
+        if (cur_sp < USER_STACK_BOTTOM + auxv_bytes_len) return error.OutOfMemory;
+        cur_sp -= auxv_bytes_len;
+        const auxv_sp = cur_sp;
+
         var aux_bytes: [auxv_data.len * 8]u8 = undefined;
         for (auxv_data, 0..) |v, idx| {
             std.mem.writeInt(u64, aux_bytes[idx * 8 ..][0..8], v, .little);
         }
         _ = writeToUserVaddr(pml4_phys, auxv_sp, &aux_bytes);
 
-        cur_sp -= (envp.len + 1) * 8;
+        // envp pointer table placement
+        const envp_table_bytes = (envp.len + 1) * 8;
+        if (cur_sp < USER_STACK_BOTTOM + envp_table_bytes) return error.OutOfMemory;
+        cur_sp -= envp_table_bytes;
         const envp_sp = cur_sp;
-        for (0..envp.len) |idx| {
+
+        // Pass 2: Stream envp pointer addresses derived directly from USER_STACK_TOP
+        var str_vaddr: usize = USER_STACK_TOP;
+        for (envp, 0..) |e, idx| {
+            str_vaddr -= (e.len + 1);
             var b: [8]u8 = undefined;
-            std.mem.writeInt(u64, &b, envp_vaddrs[idx], .little);
+            std.mem.writeInt(u64, &b, str_vaddr, .little);
             _ = writeToUserVaddr(pml4_phys, envp_sp + idx * 8, &b);
         }
         var zero_b = [_]u8{0} ** 8;
         _ = writeToUserVaddr(pml4_phys, envp_sp + envp.len * 8, &zero_b);
 
-        cur_sp -= (argv.len + 1) * 8;
+        // argv pointer table placement
+        const argv_table_bytes = (argv.len + 1) * 8;
+        if (cur_sp < USER_STACK_BOTTOM + argv_table_bytes) return error.OutOfMemory;
+        cur_sp -= argv_table_bytes;
         const argv_sp = cur_sp;
-        for (0..argv.len) |idx| {
+
+        // Pass 2 (cont): Stream argv pointer addresses derived directly from string stream
+        for (argv, 0..) |a, idx| {
+            str_vaddr -= (a.len + 1);
             var b: [8]u8 = undefined;
-            std.mem.writeInt(u64, &b, argv_vaddrs[idx], .little);
+            std.mem.writeInt(u64, &b, str_vaddr, .little);
             _ = writeToUserVaddr(pml4_phys, argv_sp + idx * 8, &b);
         }
         _ = writeToUserVaddr(pml4_phys, argv_sp + argv.len * 8, &zero_b);
 
+        // argc word placement
+        if (cur_sp < USER_STACK_BOTTOM + 8) return error.OutOfMemory;
         cur_sp -= 8;
         var argc_b: [8]u8 = undefined;
         std.mem.writeInt(u64, &argc_b, argv.len, .little);

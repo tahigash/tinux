@@ -14,7 +14,6 @@ LOG_FILE="/tmp/tinux_qemu_${TEST_CASE}.log"
 DISK_IMG="/tmp/tinux_disk_${TEST_CASE}.img"
 KERNEL_BIN="zig-out/bin/tinux"
 INITRAMFS_ROOT=".cache/initramfs_root"
-rm -f src/proc/*.elf src/proc/*.o src/proc/*.elf.o
 mkdir -p .cache src/proc src/fs "$INITRAMFS_ROOT/bin" "$INITRAMFS_ROOT/etc" \
          "$INITRAMFS_ROOT/lib" "$INITRAMFS_ROOT/tmp" "$INITRAMFS_ROOT/mnt"
 
@@ -49,10 +48,10 @@ fi
 build_user_elf() {
     local src_file="$1"
     local out_bin="$2"
-    local pie_flag="${3:--fno-pie}"
-    if [[ "$pie_flag" == "-fno-pie" ]]; then
+    local pie_flag="${3:--fno-PIE}"
+    if [[ "$pie_flag" =~ ^-[fF][nN][oO]-[pP][iI][eE]$ ]]; then
         pie_flag="-fno-PIE"
-    elif [[ "$pie_flag" == "-fpie" ]]; then
+    elif [[ "$pie_flag" =~ ^-[fF][pP][iI][eE]$ ]]; then
         pie_flag="-fPIE"
     fi
     if [[ ! -f "$src_file" ]]; then
@@ -64,7 +63,7 @@ build_user_elf() {
         -O ReleaseSmall \
         "$pie_flag" \
         "-femit-bin=${out_bin}" >/dev/null 2>&1; then
-        rm -f "${out_bin}.o"
+        rm -f "${out_bin}.o" "${out_bin}.elf.o"
         chmod +x "$out_bin"
         return 0
     fi
@@ -79,9 +78,10 @@ build_user_elf() {
         "$pie_flag" \
         "-femit-bin=${out_bin}"; then
         echo "[HARNESS] FAIL: Failed to compile user ELF $src_file"
+        rm -f "${out_bin}.o" "${out_bin}.elf.o"
         return 1
     fi
-    rm -f "${out_bin}.o"
+    rm -f "${out_bin}.o" "${out_bin}.elf.o"
     chmod +x "$out_bin"
     return 0
 }
@@ -542,14 +542,14 @@ export fn bbMain(initial_rsp: [*]const u64) callconv(.C) noreturn {
     unreachable;
 }
 BB_EOF
-    build_user_elf "$bb_src" "$bb_out" "-fno-pie"
+    build_user_elf "$bb_src" "$bb_out" "-fno-PIE"
 }
 # ------------------------------------------------------------------------------
 # 1. Stage-Specific Userland & Initramfs Preparation
 # ------------------------------------------------------------------------------
-if (( TASK_NUM >= 5 )) && [[ -f "src/user/init_test.zig" ]]; then
+if [[ -f "src/user/init_test.zig" ]]; then
     echo "[HARNESS] Compiling standalone user ELF src/user/init_test.zig..."
-    build_user_elf "src/user/init_test.zig" "src/proc/init_test.elf" "-fno-PIE" || exit 1
+    build_user_elf "src/user/init_test.zig" ".cache/init_test.elf" "-fno-PIE" || exit 1
 fi
 if (( TASK_NUM >= 6 )); then
     echo "[HARNESS] Preparing initramfs root filesystem for ${TEST_CASE}..."
@@ -629,7 +629,7 @@ EOF
     if (( TASK_NUM >= 11 )) && [[ -f "src/user/ld_tinux_so.zig" ]] && [[ -f "src/user/dyn_inspect.zig" ]]; then
         echo "TINUX_SO_SHARED_LIBRARY_PAYLOAD_v1" > "${INITRAMFS_ROOT}/lib/libtinux.so"
         build_user_elf "src/user/ld_tinux_so.zig" "${INITRAMFS_ROOT}/lib/ld-musl-x86_64.so.1" "-fPIE" || exit 1
-        build_user_elf "src/user/dyn_inspect.zig" "${INITRAMFS_ROOT}/bin/dyn_inspect" "-fno-pie" || exit 1
+        build_user_elf "src/user/dyn_inspect.zig" "${INITRAMFS_ROOT}/bin/dyn_inspect" "-fno-PIE" || exit 1
         # Ensure PT_INTERP (p_type=3) program header is present in /bin/dyn_inspect
         "$PYTHON_BIN" - "${INITRAMFS_ROOT}/bin/dyn_inspect" << 'PY_EOF'
 import struct, sys
@@ -652,22 +652,22 @@ open(path, "wb").write(data)
 PY_EOF
     fi
     if (( TASK_NUM >= 13 )) && [[ -f "src/user/net_test.zig" ]]; then
-        build_user_elf "src/user/net_test.zig" "${INITRAMFS_ROOT}/bin/net_test" "-fno-pie" || exit 1
+        build_user_elf "src/user/net_test.zig" "${INITRAMFS_ROOT}/bin/net_test" "-fno-PIE" || exit 1
     fi
     if (( TASK_NUM >= 14 )) && [[ -f "src/user/thread_epoll_test.zig" ]]; then
-        build_user_elf "src/user/thread_epoll_test.zig" "${INITRAMFS_ROOT}/bin/thread_epoll_test" "-fno-pie" || exit 1
+        build_user_elf "src/user/thread_epoll_test.zig" "${INITRAMFS_ROOT}/bin/thread_epoll_test" "-fno-PIE" || exit 1
     fi
     if (( TASK_NUM >= 17 )) && [[ -f "src/user/ping_test.zig" ]]; then
-        build_user_elf "src/user/ping_test.zig" "${INITRAMFS_ROOT}/bin/ping_test" "-fno-pie" || exit 1
+        build_user_elf "src/user/ping_test.zig" "${INITRAMFS_ROOT}/bin/ping_test" "-fno-PIE" || exit 1
     fi
     if (( TASK_NUM >= 18 )) && [[ -f "src/user/sig_test.zig" ]]; then
-        build_user_elf "src/user/sig_test.zig" "${INITRAMFS_ROOT}/bin/sig_test" "-fno-pie" || exit 1
+        build_user_elf "src/user/sig_test.zig" "${INITRAMFS_ROOT}/bin/sig_test" "-fno-PIE" || exit 1
     fi
     if (( TASK_NUM >= 19 )) && [[ -f "src/user/dns_test.zig" ]]; then
-        build_user_elf "src/user/dns_test.zig" "${INITRAMFS_ROOT}/bin/dns_test" "-fno-pie" || exit 1
+        build_user_elf "src/user/dns_test.zig" "${INITRAMFS_ROOT}/bin/dns_test" "-fno-PIE" || exit 1
     fi
     if (( TASK_NUM >= 20 )) && [[ -f "src/user/smp_test.zig" ]]; then
-        build_user_elf "src/user/smp_test.zig" "${INITRAMFS_ROOT}/bin/smp_test" "-fno-pie" || exit 1
+        build_user_elf "src/user/smp_test.zig" "${INITRAMFS_ROOT}/bin/smp_test" "-fno-PIE" || exit 1
     fi
     "$PYTHON_BIN" tools/cpio_writer.py "$INITRAMFS_ROOT" .cache/initramfs.cpio
 fi
@@ -675,7 +675,7 @@ fi
 # 2. Build Tinux Kernel
 # ------------------------------------------------------------------------------
 echo "[HARNESS] Building Tinux kernel for ${TEST_CASE}..."
-if ! zig build; then
+if ! zig build -Dtask="${TEST_CASE}"; then
     echo "[HARNESS] FAIL: zig build failed."
     exit 1
 fi

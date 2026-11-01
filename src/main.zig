@@ -22,7 +22,12 @@ const dispatch = @import("syscall/dispatch.zig");
 const initramfs = @import("initramfs");
 const initramfs_archive: []const u8 = initramfs.data;
 
-const init_test_elf = @embedFile("proc/init_test.elf");
+// Embedded userland test ELF binary provided via build system (.cache/init_test.elf)
+const init_test = @import("init_test");
+const init_test_elf: []const u8 = init_test.data;
+
+// Milestone configuration provided via build system
+const task_config = @import("task_config");
 
 comptime {
     std.testing.refAllDecls(idt);
@@ -78,10 +83,23 @@ pub const TaskId = enum {
             .TASK_020 => "TASK-020",
         };
     }
+
+    pub fn parse(s: []const u8) ?TaskId {
+        inline for (std.meta.fields(TaskId)) |field| {
+            if (std.mem.eql(u8, s, field.name)) {
+                return @enumFromInt(field.value);
+            }
+            const enum_val: TaskId = @enumFromInt(field.value);
+            if (std.mem.eql(u8, s, enum_val.toSlice())) {
+                return enum_val;
+            }
+        }
+        return null;
+    }
 };
 
-/// Active milestone target. Update this single line to activate sequential suites:
-pub const CURRENT_TASK: TaskId = .TASK_005;
+/// Active milestone target. Configured via build option -Dtask=<TASK-0XX> (defaults to TASK-005):
+pub const CURRENT_TASK: TaskId = TaskId.parse(task_config.task) orelse .TASK_005;
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     serial.print("\n[TINUX_PANIC] {s}\n", .{msg});
