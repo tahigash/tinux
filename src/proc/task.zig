@@ -7,6 +7,7 @@ const SyscallFrame = syscall_arch.SyscallFrame;
 
 pub const MAX_TASKS: usize = 16;
 pub const KERNEL_STACK_SIZE: usize = 16384;
+pub const KSTACK_SIZE: usize = KERNEL_STACK_SIZE;
 pub const DEFAULT_MMAP_BASE: usize = 0x2000_0000;
 
 pub const TaskState = enum(u8) {
@@ -24,6 +25,30 @@ pub const TaskState = enum(u8) {
     WAITING_EPOLL = 11,
     WAITING_SIGNAL = 12,
     WAITING_SOCK_ACCEPT = 13,
+
+    pub const RUNNABLE = TaskState.READY;
+    pub const WAITING = TaskState.WAITING_CHILD;
+    pub const BLOCKED = TaskState.WAITING_CHILD;
+
+    pub fn isRunnable(self: TaskState) bool {
+        return self == .READY or self == .RUNNING;
+    }
+
+    pub fn isBlocked(self: TaskState) bool {
+        return switch (self) {
+            .WAITING_CHILD,
+            .WAITING_PIPE_READ,
+            .WAITING_PIPE_WRITE,
+            .WAITING_SLEEP,
+            .WAITING_TTY,
+            .WAITING_SOCK_READ,
+            .WAITING_SOCK_ACCEPT,
+            .WAITING_FUTEX,
+            .WAITING_EPOLL,
+            .WAITING_SIGNAL => true,
+            else => false,
+        };
+    }
 };
 
 pub const Task = struct {
@@ -56,6 +81,10 @@ pub const Task = struct {
     comm_buf: [32]u8 = [_]u8{0} ** 32,
     comm_len: usize = 0,
     fd_table: [vfs.MAX_OPEN_FILES]vfs.FdEntry = [_]vfs.FdEntry{.{}} ** vfs.MAX_OPEN_FILES,
+
+    pub fn kstackTop(self: *const Task) usize {
+        return self.kernel_stack_top;
+    }
 
     pub fn cwd(self: *const Task) []const u8 {
         return self.cwd_buf[0..self.cwd_len];
@@ -116,6 +145,24 @@ pub fn currentTask() *Task {
 
 pub fn currentTaskIndex() usize {
     return current_task_idx;
+}
+
+pub fn getTaskByPid(pid: usize) ?*Task {
+    for (&tasks) |*t| {
+        if (t.state != .UNUSED and t.pid == pid) {
+            return t;
+        }
+    }
+    return null;
+}
+
+pub fn getTaskIndexByPid(pid: usize) ?usize {
+    for (&tasks, 0..) |*t, idx| {
+        if (t.state != .UNUSED and t.pid == pid) {
+            return idx;
+        }
+    }
+    return null;
 }
 
 pub fn initPid1(pml4_phys: usize, initial_brk: usize, comm_name: []const u8) *Task {
@@ -203,6 +250,17 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
     tasks[child_idx].saved_frame = child_frame_ptr;
 
     return child_idx;
+}
+
+pub fn exitCurrentTask(exit_status: i32) *SyscallFrame {
+    const cur = currentTask();
+    cur.state = .ZOMBIE;
+    cur.exit_status = exit_status;
+    cur.closeAllFds();
+    wakeParentIfWaiting(cur.parent_pid);
+    const next_idx = scheduleNextOrWait();
+    activateTask(next_idx);
+    return tasks[next_idx].saved_frame;
 }
 
 pub fn wakeParentIfWaiting(parent_pid: usize) void {

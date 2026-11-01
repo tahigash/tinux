@@ -76,8 +76,14 @@ fn getOrCreateNextTable(table: *PageTable, idx: usize, is_user: bool) ?*PageTabl
         entry = @as(u64, new_page_phys) | dir_flags;
         table.entries[idx] = entry;
     } else if (is_user and (entry & PTE_USER) == 0) {
-        // Propagate PTE_USER to existing intermediate directory entry
-        entry |= PTE_USER | PTE_WRITABLE;
+        // Directory entry was shared from kernel. Allocate a private table copy
+        // to prevent mutating shared kernel page tables.
+        const old_phys: usize = @intCast(entry & PTE_ADDR_MASK);
+        const old_table = @as(*PageTable, @ptrFromInt(old_phys));
+        const new_page_phys = pmm.allocZeroedPage() orelse return null;
+        const new_table = @as(*PageTable, @ptrFromInt(new_page_phys));
+        new_table.* = old_table.*;
+        entry = @as(u64, new_page_phys) | (entry & 0xFFF) | PTE_USER | PTE_WRITABLE;
         table.entries[idx] = entry;
     }
     const next_phys: usize = @intCast(entry & PTE_ADDR_MASK);
@@ -166,6 +172,9 @@ pub fn init() void {
 }
 
 pub fn createFreshUserPml4() ?usize {
+    const src_pml4 = @as(*PageTable, @ptrFromInt(kernel_pml4_phys));
+    const src_pdpt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(src_pml4.entries[0] & PTE_ADDR_MASK))));
+    const src_pd = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(src_pdpt.entries[0] & PTE_ADDR_MASK))));
     const dst_pml4_phys = pmm.allocZeroedPage() orelse return null;
     const dst_pdpt_phys = pmm.allocZeroedPage() orelse return null;
     const dst_pd_phys = pmm.allocZeroedPage() orelse return null;
@@ -174,21 +183,25 @@ pub fn createFreshUserPml4() ?usize {
     const dst_pdpt = @as(*PageTable, @ptrFromInt(dst_pdpt_phys));
     const dst_pd = @as(*PageTable, @ptrFromInt(dst_pd_phys));
 
-    const src_pml4 = @as(*PageTable, @ptrFromInt(kernel_pml4_phys));
-    const src_pdpt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(src_pml4.entries[0] & PTE_ADDR_MASK))));
-    const src_pd = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(src_pdpt.entries[0] & PTE_ADDR_MASK))));
-
     dst_pml4.entries[0] = @as(u64, dst_pdpt_phys) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
     dst_pdpt.entries[0] = @as(u64, dst_pd_phys) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
-    dst_pdpt.entries[1] = src_pdpt.entries[1]; // Share kernel heap
-    dst_pdpt.entries[2] = src_pdpt.entries[2];
-    dst_pdpt.entries[3] = src_pdpt.entries[3]; // Share MMIO mappings
 
-    // Identity map kernel in first 128 MiB (pd_idx = 0..64)
-    var pd_idx: usize = 0;
-    while (pd_idx < 64) : (pd_idx += 1) {
-        dst_pd.entries[pd_idx] = src_pd.entries[pd_idx];
+    // Share all kernel mappings in PDPT 0 (identity map 0..63 and kernel heap 128)
+    for (0..512) |pdi| {
+        const pde = src_pd.entries[pdi];
+        if ((pde & PTE_PRESENT) != 0 and (pde & PTE_USER) == 0) {
+            dst_pd.entries[pdi] = pde;
+        }
     }
+
+    // Share higher-half kernel PDPT entries if present
+    for (1..512) |pdpti| {
+        const pdpte = src_pdpt.entries[pdpti];
+        if ((pdpte & PTE_PRESENT) != 0 and (pdpte & PTE_USER) == 0) {
+            dst_pdpt.entries[pdpti] = pdpte;
+        }
+    }
+
     return dst_pml4_phys;
 }
 
@@ -203,21 +216,31 @@ pub fn cloneUserPml4(src_pml4_phys: usize) ?usize {
     if ((src_pdpte & PTE_PRESENT) == 0) return dst_pml4_phys;
 
     const src_pd = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(src_pdpte & PTE_ADDR_MASK))));
+    const dst_pml4 = @as(*PageTable, @ptrFromInt(dst_pml4_phys));
+    const dst_pdpt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(dst_pml4.entries[0] & PTE_ADDR_MASK))));
+    const dst_pd = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(dst_pdpt.entries[0] & PTE_ADDR_MASK))));
 
-    var pd_idx: usize = 0;
-    while (pd_idx < 512) : (pd_idx += 1) {
-        const pde = src_pd.entries[pd_idx];
-        if ((pde & PTE_PRESENT) == 0) continue;
-        const pt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pde & PTE_ADDR_MASK))));
-        var pt_idx: usize = 0;
-        while (pt_idx < 512) : (pt_idx += 1) {
-            const pte = pt.entries[pt_idx];
-            if ((pte & PTE_PRESENT) != 0 and (pte & PTE_USER) != 0) {
-                const vaddr = (pd_idx << 21) | (pt_idx << 12);
-                const src_paddr: usize = @intCast(pte & PTE_ADDR_MASK);
-                const new_paddr = pmm.allocZeroedPage() orelse return null;
-                @memcpy(@as([*]u8, @ptrFromInt(new_paddr))[0..4096], @as([*]const u8, @ptrFromInt(src_paddr))[0..4096]);
-                _ = mapPage(dst_pml4_phys, vaddr, new_paddr, pte & 0xFFF);
+    for (0..512) |pdi| {
+        const pde = src_pd.entries[pdi];
+        if ((pde & PTE_PRESENT) == 0 or (pde & PTE_USER) == 0) continue;
+
+        const src_pt = @as(*PageTable, @ptrFromInt(@as(usize, @intCast(pde & PTE_ADDR_MASK))));
+        const dst_pt_phys = pmm.allocZeroedPage() orelse return null;
+        const dst_pt = @as(*PageTable, @ptrFromInt(dst_pt_phys));
+        dst_pd.entries[pdi] = @as(u64, dst_pt_phys) | (pde & 0xFFF);
+
+        for (0..512) |pti| {
+            const pte = src_pt.entries[pti];
+            if ((pte & PTE_PRESENT) == 0) continue;
+            if ((pte & PTE_USER) == 0) {
+                dst_pt.entries[pti] = pte;
+            } else {
+                const new_frame = pmm.allocZeroedPage() orelse return null;
+                const old_frame = @as(usize, @intCast(pte & PTE_ADDR_MASK));
+                const src_slice = @as([*]const u8, @ptrFromInt(old_frame))[0..PAGE_SIZE];
+                const dst_slice = @as([*]u8, @ptrFromInt(new_frame))[0..PAGE_SIZE];
+                @memcpy(dst_slice, src_slice);
+                dst_pt.entries[pti] = @as(u64, new_frame) | (pte & 0xFFF);
             }
         }
     }

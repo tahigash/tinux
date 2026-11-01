@@ -15,7 +15,7 @@
 - [x] **TASK-004**: `docs/specs/SPEC_TASK_004.md`: `SYSCALL`/`SYSRET` MSR Setup, Ring 3 Transition, and Minimal Syscall Dispatcher
 - [x] **TASK-005**: `docs/specs/SPEC_TASK_005.md`: Static ELF64 Loader, System V AMD64 Stack (`auxv`), TLS (`arch_prctl`), and `sys_brk`
 - [x] **TASK-006**: `docs/specs/SPEC_TASK_006.md`: In-Memory VFS, CPIO (`newc`) Initramfs Unpacker, and File I/O Syscalls
-- [ ] **TASK-007**: `docs/specs/SPEC_TASK_007.md`: Multi-Process Management (`Task` Table, `cloneUserPml4`), `fork`/`execve`/`wait4`
+- [x] **TASK-007**: `docs/specs/SPEC_TASK_007.md`: Multi-Process Management (`Task` Table, `cloneUserPml4`), `fork`/`execve`/`wait4`
 - [ ] **TASK-008**: `docs/specs/SPEC_TASK_008.md`: IPC Pipes (`pipe2`), I/O Redirection (`dup2`/`O_CLOEXEC`), and `/proc` Pseudo-FS
 - [ ] **TASK-009**: `docs/specs/SPEC_TASK_009.md`: Writable `tmpfs` (Create/Write/Truncate/Unlink/Mkdir), and `getdents64`
 - [ ] **TASK-010**: `docs/specs/SPEC_TASK_010.md`: Hardware Timer (8259A PIC + 8254 PIT 100Hz), `nanosleep`, and `/proc/[pid]/stat`

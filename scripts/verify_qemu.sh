@@ -98,7 +98,8 @@ ensure_busybox_elf() {
             chmod +x "$bb_out"
             cp "$bb_out" "${INITRAMFS_ROOT}/bin/sh"
             cp "$bb_out" "${INITRAMFS_ROOT}/bin/cat"
-            chmod +x "${INITRAMFS_ROOT}/bin/sh" "${INITRAMFS_ROOT}/bin/cat"
+            cp "$bb_out" "${INITRAMFS_ROOT}/bin/grep"
+            chmod +x "${INITRAMFS_ROOT}/bin/sh" "${INITRAMFS_ROOT}/bin/cat" "${INITRAMFS_ROOT}/bin/grep"
             return 0
         fi
     fi
@@ -110,7 +111,8 @@ ensure_busybox_elf() {
     build_user_elf "$bb_src" "$bb_out" "-fno-PIE" || return 1
     cp "$bb_out" "${INITRAMFS_ROOT}/bin/sh"
     cp "$bb_out" "${INITRAMFS_ROOT}/bin/cat"
-    chmod +x "${INITRAMFS_ROOT}/bin/sh" "${INITRAMFS_ROOT}/bin/cat"
+    cp "$bb_out" "${INITRAMFS_ROOT}/bin/grep"
+    chmod +x "${INITRAMFS_ROOT}/bin/sh" "${INITRAMFS_ROOT}/bin/cat" "${INITRAMFS_ROOT}/bin/grep"
     return 0
 }
 # ------------------------------------------------------------------------------
@@ -138,7 +140,7 @@ EOF
         7)
             cat << 'EOF' > "${INITRAMFS_ROOT}/etc/rc.sh"
 #!/bin/sh
-echo "[TINUX_SH] BusyBox /bin/sh started (PID $$)"
+echo "[TINUX_SH] /bin/sh started (PID $$)"
 /bin/cat /etc/motd
 echo "[TINUX_SH] Child process /bin/cat completed and reaped via wait4!"
 exit 0

@@ -38,9 +38,11 @@ pub const SYS_IOCTL: u64 = 16;
 pub const SYS_PREAD64: u64 = 17;
 pub const SYS_READV: u64 = 19;
 pub const SYS_WRITEV: u64 = 20;
+pub const SYS_ACCESS: u64 = 21;
 pub const SYS_PIPE: u64 = 22;
 pub const SYS_DUP: u64 = 32;
 pub const SYS_DUP2: u64 = 33;
+pub const SYS_PAUSE: u64 = 34;
 pub const SYS_NANOSLEEP: u64 = 35;
 pub const SYS_GETPID: u64 = 39;
 pub const SYS_SOCKET: u64 = 41;
@@ -65,6 +67,8 @@ pub const SYS_WAIT4: u64 = 61;
 pub const SYS_KILL: u64 = 62;
 pub const SYS_UNAME: u64 = 63;
 pub const SYS_FCNTL: u64 = 72;
+pub const SYS_GETCWD: u64 = 79;
+pub const SYS_CHDIR: u64 = 80;
 pub const SYS_MKDIR: u64 = 83;
 pub const SYS_RMDIR: u64 = 84;
 pub const SYS_UNLINK: u64 = 87;
@@ -73,14 +77,17 @@ pub const SYS_GETUID: u64 = 102;
 pub const SYS_GETGID: u64 = 104;
 pub const SYS_GETEUID: u64 = 107;
 pub const SYS_GETEGID: u64 = 108;
+pub const SYS_SETPGID: u64 = 109;
 pub const SYS_GETPPID: u64 = 110;
 pub const SYS_GETPGRP: u64 = 111;
+pub const SYS_SETSID: u64 = 112;
 pub const SYS_GETPGID: u64 = 121;
 pub const SYS_ARCH_PRCTL: u64 = 158;
 pub const SYS_GETTID: u64 = 186;
 pub const SYS_GETDENTS64: u64 = 217;
 pub const SYS_SET_TID_ADDRESS: u64 = 218;
 pub const SYS_CLOCK_GETTIME: u64 = 228;
+pub const SYS_CLOCK_GETRES: u64 = 229;
 pub const SYS_CLOCK_NANOSLEEP: u64 = 230;
 pub const SYS_EXIT_GROUP: u64 = 231;
 pub const SYS_OPENAT: u64 = 257;
@@ -88,11 +95,14 @@ pub const SYS_MKDIRAT: u64 = 258;
 pub const SYS_NEWFSTATAT: u64 = 262;
 pub const SYS_UNLINKAT: u64 = 263;
 pub const SYS_READLINKAT: u64 = 267;
+pub const SYS_FACCESSAT: u64 = 269;
 pub const SYS_ACCEPT4: u64 = 288;
 pub const SYS_DUP3: u64 = 292;
 pub const SYS_PIPE2: u64 = 293;
 pub const SYS_SET_ROBUST_LIST: u64 = 273;
 pub const SYS_PRLIMIT64: u64 = 302;
+pub const SYS_GETRANDOM: u64 = 318;
+pub const SYS_FACCESSAT2: u64 = 439;
 
 // Whence modes for sys_lseek
 pub const SEEK_SET: u32 = 0;
@@ -193,7 +203,7 @@ fn getUserString(ptr: usize, max_len: usize) ?[]const u8 {
     return null;
 }
 
-fn sysExit(status: usize) noreturn {
+fn sysExit(status: usize) *SyscallFrame {
     serial.print("[TINUX_SYSCALL] sys_exit({d}) received from Ring 3\n", .{status});
     const cur = task.currentTask();
     if (cur.pid == 1) {
@@ -204,15 +214,8 @@ fn sysExit(status: usize) noreturn {
             serial.print("[TINUX_TEST] FAIL: {s} (exit status {d})\n", .{ current_test_name, status });
             io.qemuExitFailure();
         }
-    } else {
-        cur.state = .ZOMBIE;
-        cur.exit_status = @intCast(status);
-        cur.closeAllFds();
-        task.wakeParentIfWaiting(cur.parent_pid);
-        const next_idx = task.scheduleNextOrWait();
-        task.activateTask(next_idx);
-        unreachable;
     }
+    return task.exitCurrentTask(@intCast(status));
 }
 
 pub fn initBrk(base: usize) void {
@@ -999,43 +1002,104 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
 
         SYS_CLONE => {
             const flags = a1;
-            const newsp = a2;
-            _ = newsp;
-            if ((flags & 0x100) != 0) { // SIGCHLD or standard fork clone
-                if (task.forkCurrentTask(frame)) |child_idx| {
-                    res = @intCast(task.tasks[child_idx].pid);
-                } else {
-                    res = errno_mod.toReturn(.EAGAIN);
+            const child_stack = a2;
+            _ = flags;
+            if (task.forkCurrentTask(frame)) |child_idx| {
+                if (child_stack != 0) {
+                    task.tasks[child_idx].saved_frame.user_rsp = child_stack;
                 }
+                res = @intCast(task.tasks[child_idx].pid);
             } else {
-                res = errno_mod.toReturn(.EINVAL);
+                res = errno_mod.toReturn(.EAGAIN);
             }
         },
 
         SYS_EXECVE => {
-            const path_str = getUserString(a1, 256) orelse {
+            const initial_path_str = getUserString(a1, 256) orelse {
                 res = errno_mod.toReturn(.EFAULT);
                 break :blk;
             };
 
-            var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
-            const resolved = vfs.resolveTaskPath(cur_task.cwd(), path_str, &path_buf);
-            const n_idx = vfs.lookup(resolved) orelse {
-                res = errno_mod.toReturn(.ENOENT);
+            var raw_argv_buf: [16][]const u8 = undefined;
+            var raw_envp_buf: [16][]const u8 = undefined;
+            const argv_slice = collectUserStringList(a2, &raw_argv_buf);
+            const envp_slice = collectUserStringList(a3, &raw_envp_buf);
+
+            var current_path_str = initial_path_str;
+            var interp_argv_storage: [18][]const u8 = undefined;
+            var current_argv: []const []const u8 = argv_slice;
+            var target_node_idx: ?usize = null;
+            var final_resolved_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            var final_path_len: usize = 0;
+
+            var depth: usize = 0;
+            while (depth < 4) : (depth += 1) {
+                var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+                const resolved = vfs.resolveTaskPath(cur_task.cwd(), current_path_str, &path_buf);
+                const n_idx = vfs.lookup(resolved) orelse {
+                    res = errno_mod.toReturn(.ENOENT);
+                    break :blk;
+                };
+
+                const data = vfs.getNode(n_idx).slice();
+                if (data.len >= 2 and data[0] == '#' and data[1] == '!') {
+                    var end_line: usize = 2;
+                    while (end_line < data.len and data[end_line] != '\n' and data[end_line] != '\r') : (end_line += 1) {}
+                    const line = std.mem.trim(u8, data[2..end_line], " \t");
+                    if (line.len == 0) {
+                        res = errno_mod.toReturn(.ENOEXEC);
+                        break :blk;
+                    }
+
+                    var interp_path: []const u8 = line;
+                    var opt_arg: ?[]const u8 = null;
+                    if (std.mem.indexOfAny(u8, line, " \t")) |space_pos| {
+                        interp_path = line[0..space_pos];
+                        opt_arg = std.mem.trim(u8, line[space_pos + 1 ..], " \t");
+                    }
+
+                    interp_argv_storage[0] = interp_path;
+                    var new_argc: usize = 1;
+                    if (opt_arg) |arg| {
+                        if (arg.len > 0) {
+                            interp_argv_storage[new_argc] = arg;
+                            new_argc += 1;
+                        }
+                    }
+                    interp_argv_storage[new_argc] = current_path_str;
+                    new_argc += 1;
+                    if (current_argv.len > 1) {
+                        for (current_argv[1..]) |arg| {
+                            if (new_argc < interp_argv_storage.len) {
+                                interp_argv_storage[new_argc] = arg;
+                                new_argc += 1;
+                            }
+                        }
+                    }
+
+                    current_argv = interp_argv_storage[0..new_argc];
+                    current_path_str = interp_path;
+                    continue;
+                }
+
+                target_node_idx = n_idx;
+                @memcpy(final_resolved_path[0..resolved.len], resolved);
+                final_path_len = resolved.len;
+                break;
+            }
+
+            const exec_node_idx = target_node_idx orelse {
+                res = errno_mod.toReturn(.ENOEXEC);
                 break :blk;
             };
 
-            const elf_data = vfs.getNode(n_idx).slice();
+            const elf_data = vfs.getNode(exec_node_idx).slice();
             const new_pml4 = vmm.createFreshUserPml4() orelse {
                 res = errno_mod.toReturn(.ENOMEM);
                 break :blk;
             };
 
-            // Collect argv and envp
-            const argv_slice = collectStrings(a2);
-            const envp_slice = collectStrings(a3);
-
-            const loaded = elf.loadStaticElfWithArgs(new_pml4, elf_data, argv_slice, envp_slice) catch {
+            const loaded = elf.loadStaticElfWithArgs(new_pml4, elf_data, current_argv, envp_slice) catch {
                 res = errno_mod.toReturn(.ENOEXEC);
                 break :blk;
             };
@@ -1043,23 +1107,39 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             cur_task.pml4_phys = new_pml4;
             cur_task.initial_brk = loaded.initial_brk;
             cur_task.current_brk = loaded.initial_brk;
-            cur_task.setComm(resolved);
+            cur_task.fs_base = 0;
+            syscall_arch.wrmsr(syscall_arch.MSR_FS_BASE, 0);
+            cur_task.setComm(final_resolved_path[0..final_path_len]);
             cur_task.closeCloexecFds();
 
+            frame.r15 = 0;
+            frame.r14 = 0;
+            frame.r13 = 0;
+            frame.r12 = 0;
+            frame.rbp = 0;
+            frame.rbx = 0;
+            frame.r9 = 0;
+            frame.r8 = 0;
+            frame.r10 = 0;
+            frame.rdx = 0;
+            frame.rsi = 0;
+            frame.rdi = 0;
+            frame.rax = 0;
+            frame.user_rflags = 0x202;
             frame.user_rip = loaded.entry_rip;
             frame.user_rsp = loaded.user_rsp;
-            frame.rax = 0;
+
             vmm.loadCr3(new_pml4);
             return frame;
         },
 
-        SYS_EXIT, SYS_EXIT_GROUP => sysExit(a1),
+        SYS_EXIT, SYS_EXIT_GROUP => return sysExit(a1),
 
         SYS_WAIT4 => {
             const target_pid: isize = @bitCast(a1);
             const status_ptr = a2;
-            const options = a3;
-            _ = options;
+            const options: u32 = @truncate(a3);
+            const wnohang = (options & 1) != 0;
 
             var found_zombie: ?usize = null;
             var has_children = false;
@@ -1084,9 +1164,13 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                     std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(status_ptr)), status_val, .little);
                 }
                 z.state = .UNUSED;
+                z.pid = 0;
+                z.pml4_phys = 0;
                 res = @intCast(reaped_pid);
             } else if (!has_children) {
                 res = errno_mod.toReturn(.ECHILD);
+            } else if (wnohang) {
+                res = 0;
             } else {
                 cur_task.state = .WAITING_CHILD;
                 cur_task.wait_target_pid = target_pid;
@@ -1143,6 +1227,10 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             } else {
                 switch (cmd) {
                     0, 1030 => { // F_DUPFD, F_DUPFD_CLOEXEC
+                        if (arg >= vfs.MAX_OPEN_FILES) {
+                            res = errno_mod.toReturn(.EINVAL);
+                            break :blk;
+                        }
                         var newfd: ?usize = null;
                         for (arg..vfs.MAX_OPEN_FILES) |i| {
                             if (cur_task.fd_table[i].kind == .UNUSED) {
@@ -1273,6 +1361,100 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 res = @intCast(copy_len);
             } else {
                 res = errno_mod.toReturn(.ENOENT);
+            }
+        },
+
+        SYS_GETCWD => {
+            const buf_ptr = a1;
+            const size = a2;
+            if (size == 0) {
+                res = errno_mod.toReturn(.EINVAL);
+            } else if (!validateUserBuffer(buf_ptr, size)) {
+                res = errno_mod.toReturn(.EFAULT);
+            } else {
+                const c = cur_task.cwd();
+                const path_str = if (c.len == 0) "/" else c;
+                if (size < path_str.len + 1) {
+                    res = errno_mod.toReturn(.ERANGE);
+                } else {
+                    const dst = @as([*]u8, @ptrFromInt(buf_ptr));
+                    @memcpy(dst[0..path_str.len], path_str);
+                    dst[path_str.len] = 0;
+                    res = @intCast(path_str.len + 1);
+                }
+            }
+        },
+
+        SYS_ACCESS, SYS_FACCESSAT, SYS_FACCESSAT2 => {
+            const path_ptr = if (num == SYS_ACCESS) a1 else a2;
+            const path_str = getUserString(path_ptr, 256) orelse {
+                res = errno_mod.toReturn(.EFAULT);
+                break :blk;
+            };
+            var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const resolved = vfs.resolveTaskPath(cur_task.cwd(), path_str, &path_buf);
+            if (vfs.lookup(resolved) != null) {
+                res = 0;
+            } else {
+                res = errno_mod.toReturn(.ENOENT);
+            }
+        },
+
+        SYS_PAUSE => res = 0,
+
+        SYS_CHDIR => {
+            const path_str = getUserString(a1, 256) orelse {
+                res = errno_mod.toReturn(.EFAULT);
+                break :blk;
+            };
+            var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const resolved = vfs.resolveTaskPath(cur_task.cwd(), path_str, &path_buf);
+            if (vfs.lookup(resolved)) |n_idx| {
+                const node = vfs.getNode(n_idx);
+                if (!node.isDir()) {
+                    res = errno_mod.toReturn(.ENOTDIR);
+                } else {
+                    const n = @min(resolved.len, cur_task.cwd_buf.len - 1);
+                    @memcpy(cur_task.cwd_buf[0..n], resolved[0..n]);
+                    cur_task.cwd_len = n;
+                    res = 0;
+                }
+            } else {
+                res = errno_mod.toReturn(.ENOENT);
+            }
+        },
+
+        SYS_SETPGID => {
+            cur_task.pgid = if (a2 != 0) a2 else cur_task.pid;
+            res = 0;
+        },
+
+        SYS_SETSID => {
+            cur_task.pgid = cur_task.pid;
+            res = @intCast(cur_task.pid);
+        },
+
+        SYS_CLOCK_GETRES => {
+            const tp_ptr = a2;
+            if (tp_ptr != 0 and validateUserBuffer(tp_ptr, @sizeOf(LinuxTimespec))) {
+                const ts = @as(*LinuxTimespec, @ptrFromInt(tp_ptr));
+                ts.tv_sec = 0;
+                ts.tv_nsec = 10_000_000;
+            }
+            res = 0;
+        },
+
+        SYS_GETRANDOM => {
+            const buf_ptr = a1;
+            const len = a2;
+            if (!validateUserBuffer(buf_ptr, len)) {
+                res = errno_mod.toReturn(.EFAULT);
+            } else {
+                const dst = @as([*]u8, @ptrFromInt(buf_ptr));
+                for (0..len) |i| {
+                    dst[i] = @as(u8, @truncate((i *% 37 +% 13)));
+                }
+                res = @intCast(len);
             }
         },
 
@@ -1553,17 +1735,16 @@ fn copyFixed(dst: []u8, src: []const u8) void {
     dst[n] = 0;
 }
 
-var temp_strings: [16][]const u8 = undefined;
-fn collectStrings(array_ptr: usize) []const []const u8 {
-    if (array_ptr == 0) return &[_][]const u8{};
+fn collectUserStringList(array_ptr: usize, out_slice: [][]const u8) []const []const u8 {
+    if (array_ptr == 0) return out_slice[0..0];
     const ptrs = @as([*]const usize, @ptrFromInt(array_ptr));
     var cnt: usize = 0;
-    while (cnt < 16) : (cnt += 1) {
+    while (cnt < out_slice.len) : (cnt += 1) {
         const str_p = ptrs[cnt];
         if (str_p == 0) break;
         if (getUserString(str_p, 256)) |s| {
-            temp_strings[cnt] = s;
+            out_slice[cnt] = s;
         } else break;
     }
-    return temp_strings[0..cnt];
+    return out_slice[0..cnt];
 }
