@@ -107,12 +107,19 @@ pub fn close(idx: usize) ?usize {
         if (sockets[idx].peer_idx) |p_idx| {
             if (p_idx < MAX_SOCKETS and sockets[p_idx].in_use) {
                 sockets[p_idx].peer_closed = true;
+                sockets[p_idx].peer_idx = null;
                 wake_peer = p_idx;
             }
         }
-        sockets[idx].in_use = false;
-        sockets[idx].state = .CLOSED;
-        sockets[idx].peer_idx = null;
+        while (sockets[idx].accept_count > 0) {
+            const queued_idx = sockets[idx].accept_queue[sockets[idx].accept_head];
+            sockets[idx].accept_head = (sockets[idx].accept_head + 1) % ACCEPT_QUEUE_LEN;
+            sockets[idx].accept_count -= 1;
+            if (queued_idx < MAX_SOCKETS and sockets[queued_idx].in_use) {
+                _ = close(queued_idx);
+            }
+        }
+        sockets[idx] = .{};
         return wake_peer;
     }
     return null;
@@ -240,8 +247,8 @@ pub fn popAccept(listen_idx: usize) ?usize {
 pub fn write(idx: usize, src: []const u8) Errno!usize {
     if (idx >= MAX_SOCKETS or !sockets[idx].in_use) return Errno.EBADF;
     const s = &sockets[idx];
-    if (s.state != .CONNECTED or s.peer_idx == null) return Errno.ENOTCONN;
     if (s.peer_closed) return Errno.EPIPE;
+    if (s.state != .CONNECTED or s.peer_idx == null) return Errno.ENOTCONN;
 
     const peer_idx = s.peer_idx.?;
     if (peer_idx >= MAX_SOCKETS or !sockets[peer_idx].in_use) return Errno.EPIPE;
@@ -561,6 +568,14 @@ fn testPeerCloseDrainAndEpipe() !void {
     const wake = close(s0);
     try std.testing.expectEqual(@as(?usize, s1), wake);
 
+    // Verify s0 is completely cleared
+    try std.testing.expectEqual(false, sockets[s0].in_use);
+    try std.testing.expectEqual(@as(?usize, null), sockets[s0].peer_idx);
+
+    // Verify s1 has peer_closed = true and peer_idx cleared (no dangling index)
+    try std.testing.expectEqual(true, sockets[s1].peer_closed);
+    try std.testing.expectEqual(@as(?usize, null), sockets[s1].peer_idx);
+
     var buf: [64]u8 = undefined;
     const r1 = read(s1, &buf);
     switch (r1) {
@@ -581,8 +596,89 @@ fn testPeerCloseDrainAndEpipe() !void {
     try std.testing.expectError(Errno.EPIPE, w_err);
 
     _ = close(s1);
+    try std.testing.expectEqual(false, sockets[s1].in_use);
+    try std.testing.expectEqual(@as(?usize, null), sockets[s1].peer_idx);
 
-    std.debug.print("  [PASS] Buffered data drain prior to EOF and EPIPE on broken peer verified\n", .{});
+    std.debug.print("  [PASS] Buffered data drain prior to EOF, peer_idx == null, and EPIPE verified\n", .{});
+}
+
+fn testAcceptQueueDrainingOnListenerClose() !void {
+    std.debug.print("[TEST 6] Accept Queue Draining on Listener Close...\n", .{});
+    init();
+
+    const srv_idx = alloc(AF_INET, SOCK_STREAM, false) orelse return error.OutOfMemory;
+    try bindInet(srv_idx, 9092);
+    try listen(srv_idx);
+
+    const c1 = alloc(AF_INET, SOCK_STREAM, false) orelse return error.OutOfMemory;
+    const c2 = alloc(AF_INET, SOCK_STREAM, false) orelse return error.OutOfMemory;
+    const c3 = alloc(AF_INET, SOCK_STREAM, false) orelse return error.OutOfMemory;
+
+    _ = try connectInet(c1, 9092);
+    _ = try connectInet(c2, 9092);
+    _ = try connectInet(c3, 9092);
+
+    try std.testing.expectEqual(@as(usize, 3), sockets[srv_idx].accept_count);
+
+    const srv_c1 = sockets[c1].peer_idx.?;
+    const srv_c2 = sockets[c2].peer_idx.?;
+    const srv_c3 = sockets[c3].peer_idx.?;
+
+    try std.testing.expect(sockets[srv_c1].in_use);
+    try std.testing.expect(sockets[srv_c2].in_use);
+    try std.testing.expect(sockets[srv_c3].in_use);
+
+    // Close listener without accepting
+    _ = close(srv_idx);
+
+    // Listener slot reset
+    try std.testing.expectEqual(false, sockets[srv_idx].in_use);
+    try std.testing.expectEqual(@as(usize, 0), sockets[srv_idx].accept_count);
+
+    // Queued server sockets closed and freed
+    try std.testing.expectEqual(false, sockets[srv_c1].in_use);
+    try std.testing.expectEqual(false, sockets[srv_c2].in_use);
+    try std.testing.expectEqual(false, sockets[srv_c3].in_use);
+
+    // Client sockets have peer_closed = true and peer_idx = null
+    try std.testing.expectEqual(true, sockets[c1].peer_closed);
+    try std.testing.expectEqual(@as(?usize, null), sockets[c1].peer_idx);
+
+    try std.testing.expectEqual(true, sockets[c2].peer_closed);
+    try std.testing.expectEqual(@as(?usize, null), sockets[c2].peer_idx);
+
+    try std.testing.expectEqual(true, sockets[c3].peer_closed);
+    try std.testing.expectEqual(@as(?usize, null), sockets[c3].peer_idx);
+
+    // Client reads return EOF
+    var buf: [16]u8 = undefined;
+    switch (read(c1, &buf)) {
+        .eof => {},
+        else => return error.TestFailed,
+    }
+    switch (read(c2, &buf)) {
+        .eof => {},
+        else => return error.TestFailed,
+    }
+    switch (read(c3, &buf)) {
+        .eof => {},
+        else => return error.TestFailed,
+    }
+
+    // Client writes return EPIPE
+    try std.testing.expectError(Errno.EPIPE, write(c1, "FAIL"));
+    try std.testing.expectError(Errno.EPIPE, write(c2, "FAIL"));
+    try std.testing.expectError(Errno.EPIPE, write(c3, "FAIL"));
+
+    _ = close(c1);
+    _ = close(c2);
+    _ = close(c3);
+
+    for (0..MAX_SOCKETS) |i| {
+        try std.testing.expectEqual(false, sockets[i].in_use);
+    }
+
+    std.debug.print("  [PASS] Accept queue draining on listener close cleanly verified with 0 leaks\n", .{});
 }
 
 pub fn main() !void {
@@ -592,5 +688,6 @@ pub fn main() !void {
     try testFullDuplexSocketpairSimultaneous();
     try testMultiConnectionAcceptQueueStress();
     try testPeerCloseDrainAndEpipe();
+    try testAcceptQueueDrainingOnListenerClose();
     std.debug.print("=== ALL EMPIRICAL SOCKET BOUNDARY TESTS PASSED CLEANLY ===\n", .{});
 }
