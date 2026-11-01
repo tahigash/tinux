@@ -92,6 +92,12 @@ pub fn closeWriter(idx: usize) void {
     }
 }
 
+pub const allocPipe = alloc;
+pub const retainRead = retainReader;
+pub const retainWrite = retainWriter;
+pub const closeRead = closeReader;
+pub const closeWrite = closeWriter;
+
 pub fn read(idx: usize, dst: []u8) PipeReadResult {
     if (idx >= MAX_PIPES or !pipes[idx].in_use) return .{ .status = .eof, .n = 0 };
     var p = &pipes[idx];

@@ -19,7 +19,7 @@ pub fn initAndRegister() void {
     _ = vfs.registerNode(
         "proc/version",
         vfs.S_IFREG | 0o444,
-        "Linux version 6.12.0-tinux (zig@tinux) #1 SMP PREEMPT_DYNAMIC\n",
+        "Linux version 6.6.0-tinux (zig@tinux) #1 SMP PREEMPT Tinux 2026\n",
     );
     _ = vfs.registerNode(
         "proc/cpuinfo",

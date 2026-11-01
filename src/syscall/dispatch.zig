@@ -727,6 +727,13 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
 
         SYS_PIPE, SYS_PIPE2 => {
             const pipefd_ptr = a1;
+            const flags: u32 = if (num == SYS_PIPE) 0 else @truncate(a2);
+            if (num == SYS_PIPE2) {
+                if ((flags & ~@as(u32, 0x80000 | 0x800)) != 0) {
+                    res = errno_mod.toReturn(.EINVAL);
+                    break :blk;
+                }
+            }
             if (!validateUserBuffer(pipefd_ptr, 8)) {
                 res = errno_mod.toReturn(.EFAULT);
             } else {
@@ -753,7 +760,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                     pipe_mod.closeWriter(p_idx);
                     res = errno_mod.toReturn(.EMFILE);
                 } else {
-                    const cloexec = (a2 & 0x80000) != 0;
+                    const cloexec = (flags & 0x80000) != 0;
                     cur_task.fd_table[r_fd.?] = .{ .kind = .PIPE_READ, .node_idx = p_idx, .cloexec = cloexec };
                     cur_task.fd_table[w_fd.?] = .{ .kind = .PIPE_WRITE, .node_idx = p_idx, .cloexec = cloexec };
 
@@ -790,6 +797,16 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         SYS_DUP2, SYS_DUP3 => {
             const oldfd = a1;
             const newfd = a2;
+            if (num == SYS_DUP3) {
+                if (oldfd == newfd) {
+                    res = errno_mod.toReturn(.EINVAL);
+                    break :blk;
+                }
+                if (a3 != 0 and a3 != 0x80000) {
+                    res = errno_mod.toReturn(.EINVAL);
+                    break :blk;
+                }
+            }
             if (oldfd >= vfs.MAX_OPEN_FILES or newfd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[oldfd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
             } else if (oldfd == newfd) {
@@ -1109,6 +1126,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             cur_task.current_brk = loaded.initial_brk;
             cur_task.fs_base = 0;
             syscall_arch.wrmsr(syscall_arch.MSR_FS_BASE, 0);
+            vmm.loadCr3(new_pml4);
             cur_task.setComm(final_resolved_path[0..final_path_len]);
             cur_task.closeCloexecFds();
 
@@ -1129,7 +1147,6 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             frame.user_rip = loaded.entry_rip;
             frame.user_rsp = loaded.user_rsp;
 
-            vmm.loadCr3(new_pml4);
             return frame;
         },
 
@@ -1502,7 +1519,9 @@ fn handleOpenat(dirfd: isize, path_str: []const u8, flags: u32, mode: u32) isize
         return errno_mod.toReturn(.EBADF);
     }
 
-    procfs.refreshDynamicNodes();
+    if (std.mem.startsWith(u8, path_str, "proc") or std.mem.startsWith(u8, path_str, "/proc")) {
+        procfs.refreshDynamicNodes();
+    }
     var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
     const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);
 
@@ -1641,7 +1660,9 @@ fn handleStatPath(dirfd: isize, path_str: []const u8, stat_ptr: usize, flags: u3
         return errno_mod.toReturn(.EBADF);
     }
 
-    procfs.refreshDynamicNodes();
+    if (std.mem.startsWith(u8, path_str, "proc") or std.mem.startsWith(u8, path_str, "/proc")) {
+        procfs.refreshDynamicNodes();
+    }
     var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
     const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);
     if (vfs.lookup(resolved)) |n_idx| {

@@ -6,7 +6,7 @@ const syscall_arch = @import("../arch/x86_64/syscall.zig");
 const SyscallFrame = syscall_arch.SyscallFrame;
 
 pub const MAX_TASKS: usize = 16;
-pub const KERNEL_STACK_SIZE: usize = 16384;
+pub const KERNEL_STACK_SIZE: usize = 32768;
 pub const KSTACK_SIZE: usize = KERNEL_STACK_SIZE;
 pub const DEFAULT_MMAP_BASE: usize = 0x2000_0000;
 

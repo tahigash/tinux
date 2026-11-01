@@ -329,6 +329,21 @@ fn tokenize(line: []const u8, tokens: *[16][]const u8) usize {
     return count;
 }
 
+fn findUnquotedPipe(line: []const u8) ?usize {
+    var in_double: bool = false;
+    var in_single: bool = false;
+    for (line, 0..) |c, i| {
+        if (c == '"' and !in_single) {
+            in_double = !in_double;
+        } else if (c == '\'' and !in_double) {
+            in_single = !in_single;
+        } else if (c == '|' and !in_double and !in_single) {
+            return i;
+        }
+    }
+    return null;
+}
+
 fn runShellLine(raw_line: []const u8) void {
     const trimmed = std.mem.trim(u8, raw_line, " \t\r\n");
     if (trimmed.len == 0 or trimmed[0] == '#') return;
@@ -336,7 +351,7 @@ fn runShellLine(raw_line: []const u8) void {
     const line = expandLine(trimmed, &exp_buf);
 
     // Handle pipeline: cmd1 | cmd2
-    if (std.mem.indexOfScalar(u8, line, '|')) |p_idx| {
+    if (findUnquotedPipe(line)) |p_idx| {
         const left = std.mem.trim(u8, line[0..p_idx], " \t");
         const right = std.mem.trim(u8, line[p_idx + 1 ..], " \t");
         var pfd: [2]i32 = .{ -1, -1 };
@@ -475,7 +490,14 @@ export fn bbMain(initial_rsp: [*]const u64) callconv(.C) noreturn {
     }
 
     var rc: usize = 0;
-    if (std.mem.eql(u8, app, "cat")) {
+    if (std.mem.eql(u8, app, "echo")) {
+        for (slice[1..], 0..) |t, idx| {
+            if (idx > 0) puts(" ");
+            puts(t);
+        }
+        puts("\n");
+        rc = 0;
+    } else if (std.mem.eql(u8, app, "cat")) {
         rc = cmdCat(slice);
     } else if (std.mem.eql(u8, app, "uname")) {
         rc = cmdUname(slice);
