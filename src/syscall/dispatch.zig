@@ -352,9 +352,13 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                             .bytes => res = @intCast(r.n),
                             .eof => res = 0,
                             .would_block => {
-                                cur_task.state = .WAITING_PIPE_READ;
-                                cur_task.wait_pipe_idx = entry.node_idx;
-                                do_block = true;
+                                if ((entry.flags & 0x800) != 0) {
+                                    res = errno_mod.toReturn(.EAGAIN);
+                                } else {
+                                    cur_task.state = .WAITING_PIPE_READ;
+                                    cur_task.wait_pipe_idx = entry.node_idx;
+                                    do_block = true;
+                                }
                             },
                         }
                     },
@@ -408,9 +412,13 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                             .bytes => res = @intCast(r.n),
                             .broken_pipe => res = errno_mod.toReturn(.EPIPE),
                             .would_block => {
-                                cur_task.state = .WAITING_PIPE_WRITE;
-                                cur_task.wait_pipe_idx = entry.node_idx;
-                                do_block = true;
+                                if ((entry.flags & 0x800) != 0) {
+                                    res = errno_mod.toReturn(.EAGAIN);
+                                } else {
+                                    cur_task.state = .WAITING_PIPE_WRITE;
+                                    cur_task.wait_pipe_idx = entry.node_idx;
+                                    do_block = true;
+                                }
                             },
                         }
                     },
@@ -761,8 +769,18 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                     res = errno_mod.toReturn(.EMFILE);
                 } else {
                     const cloexec = (flags & 0x80000) != 0;
-                    cur_task.fd_table[r_fd.?] = .{ .kind = .PIPE_READ, .node_idx = p_idx, .cloexec = cloexec };
-                    cur_task.fd_table[w_fd.?] = .{ .kind = .PIPE_WRITE, .node_idx = p_idx, .cloexec = cloexec };
+                    cur_task.fd_table[r_fd.?] = .{
+                        .kind = .PIPE_READ,
+                        .node_idx = p_idx,
+                        .flags = (flags & 0x800),
+                        .cloexec = cloexec,
+                    };
+                    cur_task.fd_table[w_fd.?] = .{
+                        .kind = .PIPE_WRITE,
+                        .node_idx = p_idx,
+                        .flags = (flags & 0x800),
+                        .cloexec = cloexec,
+                    };
 
                     std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(pipefd_ptr)), @intCast(r_fd.?), .little);
                     std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(pipefd_ptr + 4)), @intCast(w_fd.?), .little);
@@ -1519,11 +1537,11 @@ fn handleOpenat(dirfd: isize, path_str: []const u8, flags: u32, mode: u32) isize
         return errno_mod.toReturn(.EBADF);
     }
 
-    if (std.mem.startsWith(u8, path_str, "proc") or std.mem.startsWith(u8, path_str, "/proc")) {
-        procfs.refreshDynamicNodes();
-    }
     var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
     const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);
+    if (std.mem.startsWith(u8, resolved, "proc")) {
+        procfs.refreshDynamicNodes();
+    }
 
     var node_idx = vfs.lookup(resolved);
     const creat = (flags & vfs.O_CREAT) != 0;
@@ -1660,11 +1678,11 @@ fn handleStatPath(dirfd: isize, path_str: []const u8, stat_ptr: usize, flags: u3
         return errno_mod.toReturn(.EBADF);
     }
 
-    if (std.mem.startsWith(u8, path_str, "proc") or std.mem.startsWith(u8, path_str, "/proc")) {
-        procfs.refreshDynamicNodes();
-    }
     var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
     const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);
+    if (std.mem.startsWith(u8, resolved, "proc")) {
+        procfs.refreshDynamicNodes();
+    }
     if (vfs.lookup(resolved)) |n_idx| {
         const st = @as(*vfs.LinuxStat, @ptrFromInt(stat_ptr));
         vfs.fillStat(n_idx, st);
