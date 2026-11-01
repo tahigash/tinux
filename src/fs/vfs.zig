@@ -471,6 +471,35 @@ pub fn getNode(idx: usize) *VfsNode {
     return &nodes[idx];
 }
 
+pub fn getNodeSlot(idx: usize) *const VfsNode {
+    return &nodes[idx];
+}
+
+pub fn unmountChildNodes(prefix: []const u8) void {
+    const norm_prefix = normalizePath(prefix);
+    for (&nodes) |*n| {
+        if (!n.in_use) continue;
+        const name_slice = n.name();
+        if (name_slice.len > norm_prefix.len and
+            name_slice[norm_prefix.len] == '/' and
+            std.mem.startsWith(u8, name_slice, norm_prefix))
+        {
+            if (n.rw_buf) |wp| {
+                heap.allocator().free(wp[0..n.rw_cap]);
+                n.rw_buf = null;
+            }
+            n.in_use = false;
+            n.mode = 0;
+            n.static_data = "";
+            n.size = 0;
+            n.rw_cap = 0;
+            n.name_len = 0;
+            @memset(&n.name_buf, 0);
+        }
+    }
+}
+
+
 pub fn fillStat(node_idx: usize, stat_out: *LinuxStat) void {
     if (node_idx >= MAX_VFS_NODES or !nodes[node_idx].in_use) {
         stat_out.* = .{};

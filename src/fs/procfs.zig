@@ -6,6 +6,7 @@ const timer = @import("../drivers/timer.zig");
 const profiler = @import("../syscall/profiler.zig");
 const socket = @import("../net/socket.zig");
 const virtio_blk = @import("../drivers/virtio_blk.zig");
+const tarfs = @import("tarfs.zig");
 
 var meminfo_buf: [256]u8 = undefined;
 var uptime_buf: [64]u8 = undefined;
@@ -17,6 +18,31 @@ var net_unix_buf: [2048]u8 = undefined;
 var syscalls_buf: [4096]u8 = undefined;
 var strace_buf: [256]u8 = undefined;
 var partitions_buf: [128]u8 = undefined;
+var mounts_buf: [256]u8 = undefined;
+
+pub fn refreshMounts() void {
+    if (tarfs.isMounted()) {
+        const pfx = tarfs.mountPrefix();
+        var target_buf: [64]u8 = undefined;
+        const target_str = if (pfx.len > 0 and pfx[0] == '/')
+            pfx
+        else
+            std.fmt.bufPrint(&target_buf, "/{s}", .{pfx}) catch "/mnt";
+
+        const mounts_slice = std.fmt.bufPrint(
+            &mounts_buf,
+            "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n/dev/vda {s} tarfs rw 0 0\n",
+            .{target_str},
+        ) catch "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n/dev/vda /mnt tarfs rw 0 0\n";
+        _ = vfs.registerNode("proc/mounts", vfs.S_IFREG | 0o444, mounts_slice);
+    } else {
+        _ = vfs.registerNode(
+            "proc/mounts",
+            vfs.S_IFREG | 0o444,
+            "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n",
+        );
+    }
+}
 
 pub fn initAndRegister() void {
     _ = vfs.registerNode("proc", vfs.S_IFDIR | 0o555, "");
@@ -35,11 +61,7 @@ pub fn initAndRegister() void {
         vfs.S_IFREG | 0o444,
         "12.34 12.00\n",
     );
-    _ = vfs.registerNode(
-        "proc/mounts",
-        vfs.S_IFREG | 0o444,
-        "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n",
-    );
+    refreshMounts();
     _ = vfs.registerNode(
         "proc/cmdline",
         vfs.S_IFREG | 0o444,
@@ -156,6 +178,7 @@ pub fn refreshDynamicNodes() void {
     }
     _ = vfs.registerNode("proc/net/unix", vfs.S_IFREG | 0o444, net_unix_buf[0..unix_pos]);
 
+    refreshMounts();
     syncProcessNodes();
 }
 

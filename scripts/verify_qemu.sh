@@ -381,20 +381,29 @@ for cmd in commands:
 '
             ;;
         16)
-            cat << 'EOF'
-echo "[TINUX_SH] Mounting /dev/vda onto /mnt..."
-/bin/mount -t tarfs /dev/vda /mnt
-/bin/cat /proc/mounts
-echo "[TINUX_SH] Reading host-seeded file from /mnt/host_seed.txt:"
-/bin/cat /mnt/host_seed.txt
-echo "[TINUX_SH] Creating persistent file /mnt/guest_created.txt..."
-echo "PERSISTED_BY_TINUX_KERNEL_OVER_VIRTIO_BLK" > /mnt/guest_created.txt
-/bin/ls /mnt
-/bin/sync
-/bin/umount /mnt
-echo "[TINUX_MOUNT] Persistent filesystem mount, read, writeback, and umount verified!"
-exit 0
-EOF
+            "$PYTHON_BIN" -c '
+import sys, time
+commands = [
+    "echo \"[TINUX_SH] Mounting /dev/vda onto /mnt...\"\n",
+    "/bin/mount -t tarfs /dev/vda /mnt\n",
+    "/bin/cat /proc/mounts\n",
+    "echo \"[TINUX_SH] Reading host-seeded file from /mnt/host_seed.txt:\"\n",
+    "/bin/cat /mnt/host_seed.txt\n",
+    "echo \"[TINUX_SH] Creating persistent file /mnt/guest_created.txt...\"\n",
+    "echo \"PERSISTED_BY_TINUX_KERNEL_OVER_VIRTIO_BLK\" > /mnt/guest_created.txt\n",
+    "/bin/ls /mnt\n",
+    "/bin/sync\n",
+    "/bin/umount /mnt\n",
+    "echo \"[TINUX_MOUNT] Persistent filesystem mount, read, writeback, and umount verified!\"\n",
+    "exit 0\n"
+]
+for cmd in commands:
+    for ch in cmd:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(0.001)
+    time.sleep(0.05)
+'
             ;;
         17)
             cat << 'EOF'

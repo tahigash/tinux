@@ -21,6 +21,7 @@ const elf = @import("../proc/elf.zig");
 const strace = @import("strace.zig");
 const profiler = @import("profiler.zig");
 const virtio_blk = @import("../drivers/virtio_blk.zig");
+const tarfs = @import("../fs/tarfs.zig");
 
 pub const SYS_READ: u64 = 0;
 pub const SYS_WRITE: u64 = 1;
@@ -71,6 +72,7 @@ pub const SYS_WAIT4: u64 = 61;
 pub const SYS_KILL: u64 = 62;
 pub const SYS_UNAME: u64 = 63;
 pub const SYS_FCNTL: u64 = 72;
+pub const SYS_FSYNC: u64 = 74;
 pub const SYS_GETCWD: u64 = 79;
 pub const SYS_CHDIR: u64 = 80;
 pub const SYS_MKDIR: u64 = 83;
@@ -90,6 +92,8 @@ pub const SYS_SETSID: u64 = 112;
 pub const SYS_GETPGID: u64 = 121;
 pub const SYS_ARCH_PRCTL: u64 = 158;
 pub const SYS_SYNC: u64 = 162;
+pub const SYS_MOUNT: u64 = 165;
+pub const SYS_UMOUNT2: u64 = 166;
 pub const SYS_GETTID: u64 = 186;
 pub const SYS_FUTEX: u64 = 202;
 pub const SYS_EPOLL_CREATE: u64 = 213;
@@ -426,6 +430,36 @@ pub fn sysSetTidAddress(tidptr: usize) usize {
     const cur_task = task.currentTask();
     cur_task.clear_child_tid = tidptr;
     return if (cur_task.pid != 0) cur_task.pid else 1;
+}
+
+fn sysMount(source_ptr: usize, target_ptr: usize, fstype_ptr: usize, flags: usize, data_ptr: usize) isize {
+    _ = source_ptr;
+    _ = fstype_ptr;
+    _ = flags;
+    _ = data_ptr;
+    var target_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+    const target_str = readUserCString(target_ptr, &target_buf) catch |err| return errno_mod.toReturn(err);
+    const target_canonical = vfs.normalizePath(target_str);
+    if (target_canonical.len == 0) return errno_mod.toReturn(.EINVAL);
+    _ = vfs.registerNode(target_canonical, vfs.S_IFDIR | 0o755, "");
+    _ = tarfs.mountFromDisk(target_canonical) catch |err| return errno_mod.toReturn(err);
+    procfs.refreshMounts();
+    return 0;
+}
+
+fn sysUmount2(target_ptr: usize, flags: usize) isize {
+    _ = flags;
+    var target_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+    const target_str = readUserCString(target_ptr, &target_buf) catch |err| return errno_mod.toReturn(err);
+    const target_canonical = vfs.normalizePath(target_str);
+    if (!tarfs.isMounted() or !std.mem.eql(u8, target_canonical, tarfs.mountPrefix())) {
+        return errno_mod.toReturn(.EINVAL);
+    }
+    tarfs.syncToDisk() catch |err| return errno_mod.toReturn(err);
+    vfs.unmountChildNodes(tarfs.mountPrefix());
+    tarfs.setMounted(false);
+    procfs.refreshMounts();
+    return 0;
 }
 
 fn resolveAtBaseDir(dirfd: isize, path_str: []const u8) Errno![]const u8 {
@@ -1863,7 +1897,30 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         SYS_SYNC => {
+            if (tarfs.isMounted()) {
+                tarfs.syncToDisk() catch {};
+            }
             res = 0;
+        },
+
+        SYS_FSYNC => {
+            const fd = a1;
+            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
+                res = errno_mod.toReturn(.EBADF);
+            } else {
+                if (tarfs.isMounted()) {
+                    tarfs.syncToDisk() catch {};
+                }
+                res = 0;
+            }
+        },
+
+        SYS_MOUNT => {
+            res = sysMount(a1, a2, a3, a4, a5);
+        },
+
+        SYS_UMOUNT2 => {
+            res = sysUmount2(a1, a2);
         },
 
         SYS_CLOCK_GETTIME => {
