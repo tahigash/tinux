@@ -340,6 +340,7 @@ fn runTask005() noreturn {
 }
 
 fn runFullKernel(target_task: TaskId) noreturn {
+    serial.print("[TINUX_TEST] START: {s}\n", .{target_task.toSlice()});
 
     gdt.init();
     serial.writeString("[TINUX_GDT] GDT and 64-bit TSS loaded\n");

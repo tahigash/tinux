@@ -25,6 +25,8 @@ pub const SYS_OPEN: u64 = 2;
 pub const SYS_CLOSE: u64 = 3;
 pub const SYS_STAT: u64 = 4;
 pub const SYS_FSTAT: u64 = 5;
+pub const SYS_LSTAT: u64 = 6;
+pub const SYS_LSEEK: u64 = 8;
 pub const SYS_MMAP: u64 = 9;
 pub const SYS_MPROTECT: u64 = 10;
 pub const SYS_MUNMAP: u64 = 11;
@@ -89,6 +91,17 @@ pub const SYS_READLINKAT: u64 = 267;
 pub const SYS_ACCEPT4: u64 = 288;
 pub const SYS_DUP3: u64 = 292;
 pub const SYS_PIPE2: u64 = 293;
+pub const SYS_SET_ROBUST_LIST: u64 = 273;
+pub const SYS_PRLIMIT64: u64 = 302;
+
+// Whence modes for sys_lseek
+pub const SEEK_SET: u32 = 0;
+pub const SEEK_CUR: u32 = 1;
+pub const SEEK_END: u32 = 2;
+
+// Flags for sys_newfstatat
+pub const AT_EMPTY_PATH: u32 = 0x1000;
+pub const AT_SYMLINK_NOFOLLOW: u32 = 0x100;
 
 pub const LinuxUtsname = extern struct {
     sysname: [65]u8 = [_]u8{0} ** 65,
@@ -143,11 +156,36 @@ pub fn validateUserBuffer(buf_ptr: usize, len: usize) bool {
     return true;
 }
 
+pub fn readUserCString(ptr: usize, out_buf: []u8) error{EFAULT, ENAMETOOLONG}![]const u8 {
+    if (ptr < 0x1000 or ptr >= USER_ADDR_MAX) return error.EFAULT;
+    const p = @as([*]const u8, @ptrFromInt(ptr));
+    var len: usize = 0;
+    while (len < out_buf.len) : (len += 1) {
+        const curr_addr = ptr + len;
+        if (curr_addr >= USER_ADDR_MAX) return error.EFAULT;
+        if (len == 0 or (curr_addr & 0xFFF) == 0) {
+            if (!validateUserBuffer(curr_addr, 1)) return error.EFAULT;
+        }
+        const ch = p[len];
+        if (ch == 0) {
+            return out_buf[0..len];
+        }
+        out_buf[len] = ch;
+    }
+    return error.ENAMETOOLONG;
+}
+
 fn getUserString(ptr: usize, max_len: usize) ?[]const u8 {
-    if (ptr < 0x1000 or ptr >= 0x0000_8000_0000_0000) return null;
+    if (ptr < 0x1000 or ptr >= USER_ADDR_MAX) return null;
+    if (!validateUserBuffer(ptr, 1)) return null;
     const p = @as([*]const u8, @ptrFromInt(ptr));
     var len: usize = 0;
     while (len < max_len) : (len += 1) {
+        const curr_addr = ptr + len;
+        if (curr_addr >= USER_ADDR_MAX) return null;
+        if ((curr_addr & 0xFFF) == 0) {
+            if (!validateUserBuffer(curr_addr, 1)) return null;
+        }
         if (p[len] == 0) {
             return p[0..len];
         }
@@ -386,24 +424,26 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         SYS_OPEN => {
-            const path_str = getUserString(a1, 256) orelse {
-                res = errno_mod.toReturn(.EFAULT);
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(a1, &raw_path) catch |err| {
+                res = errno_mod.toReturn(err);
                 break :blk;
             };
             const flags: u32 = @truncate(a2);
             const mode: u32 = @truncate(a3);
-            res = handleOpen(path_str, flags, mode);
+            res = handleOpenat(vfs.AT_FDCWD, path_str, flags, mode);
         },
 
         SYS_OPENAT => {
-            // dirfd: assuming AT_FDCWD
-            const path_str = getUserString(a2, 256) orelse {
-                res = errno_mod.toReturn(.EFAULT);
+            const dirfd: isize = @bitCast(a1);
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(a2, &raw_path) catch |err| {
+                res = errno_mod.toReturn(err);
                 break :blk;
             };
             const flags: u32 = @truncate(a3);
             const mode: u32 = @truncate(a4);
-            res = handleOpen(path_str, flags, mode);
+            res = handleOpenat(dirfd, path_str, flags, mode);
         },
 
         SYS_CLOSE => {
@@ -423,61 +463,51 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             }
         },
 
-        SYS_STAT => {
-            const path_str = getUserString(a1, 256) orelse {
-                res = errno_mod.toReturn(.EFAULT);
+        SYS_STAT, SYS_LSTAT => {
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(a1, &raw_path) catch |err| {
+                res = errno_mod.toReturn(err);
                 break :blk;
             };
-            const stat_ptr = a2;
-            if (!validateUserBuffer(stat_ptr, @sizeOf(vfs.LinuxStat))) {
-                res = errno_mod.toReturn(.EFAULT);
-            } else {
-                procfs.refreshDynamicNodes();
-                var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
-                const resolved = vfs.resolveTaskPath(cur_task.cwd(), path_str, &path_buf);
-                if (vfs.lookup(resolved)) |n_idx| {
-                    const st = @as(*vfs.LinuxStat, @ptrFromInt(stat_ptr));
-                    vfs.fillStat(n_idx, st);
-                    res = 0;
-                } else {
-                    res = errno_mod.toReturn(.ENOENT);
-                }
-            }
+            res = handleStatPath(vfs.AT_FDCWD, path_str, a2, 0);
         },
 
         SYS_FSTAT => {
+            res = handleFstat(a1, a2);
+        },
+
+        SYS_LSEEK => {
             const fd = a1;
-            const stat_ptr = a2;
+            const offset: i64 = @bitCast(a2);
+            const whence: u32 = @truncate(a3);
             if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
-            } else if (!validateUserBuffer(stat_ptr, @sizeOf(vfs.LinuxStat))) {
-                res = errno_mod.toReturn(.EFAULT);
             } else {
                 const entry = &cur_task.fd_table[fd];
-                const st = @as(*vfs.LinuxStat, @ptrFromInt(stat_ptr));
                 switch (entry.kind) {
-                    .CONSOLE_IN, .CONSOLE_OUT, .CONSOLE_ERR => {
-                        st.* = .{
-                            .st_mode = vfs.S_IFCHR | 0o666,
-                            .st_rdev = 5,
-                        };
-                        res = 0;
-                    },
                     .VFS_FILE => {
-                        vfs.fillStat(entry.node_idx, st);
-                        res = 0;
+                        const node = vfs.getNode(entry.node_idx);
+                        const file_size: i64 = @intCast(node.size);
+                        const curr_off: i64 = @intCast(entry.offset);
+                        var new_off: i64 = 0;
+                        switch (whence) {
+                            SEEK_SET => new_off = offset,
+                            SEEK_CUR => new_off = curr_off + offset,
+                            SEEK_END => new_off = file_size + offset,
+                            else => {
+                                res = errno_mod.toReturn(.EINVAL);
+                                break :blk;
+                            },
+                        }
+                        if (new_off < 0) {
+                            res = errno_mod.toReturn(.EINVAL);
+                        } else {
+                            entry.offset = @intCast(new_off);
+                            res = @intCast(new_off);
+                        }
                     },
-                    .PIPE_READ, .PIPE_WRITE => {
-                        st.* = .{
-                            .st_mode = vfs.S_IFIFO | 0o600,
-                        };
-                        res = 0;
-                    },
-                    .SOCKET => {
-                        st.* = .{
-                            .st_mode = vfs.S_IFSOCK | 0o666,
-                        };
-                        res = 0;
+                    .CONSOLE_IN, .CONSOLE_OUT, .CONSOLE_ERR, .PIPE_READ, .PIPE_WRITE, .SOCKET => {
+                        res = errno_mod.toReturn(.ESPIPE);
                     },
                     else => res = errno_mod.toReturn(.EBADF),
                 }
@@ -485,25 +515,15 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         SYS_NEWFSTATAT => {
-            const path_str = getUserString(a2, 256) orelse {
-                res = errno_mod.toReturn(.EFAULT);
+            const dirfd: isize = @bitCast(a1);
+            var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
+            const path_str = readUserCString(a2, &raw_path) catch |err| {
+                res = errno_mod.toReturn(err);
                 break :blk;
             };
             const stat_ptr = a3;
-            if (!validateUserBuffer(stat_ptr, @sizeOf(vfs.LinuxStat))) {
-                res = errno_mod.toReturn(.EFAULT);
-            } else {
-                procfs.refreshDynamicNodes();
-                var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
-                const resolved = vfs.resolveTaskPath(cur_task.cwd(), path_str, &path_buf);
-                if (vfs.lookup(resolved)) |n_idx| {
-                    const st = @as(*vfs.LinuxStat, @ptrFromInt(stat_ptr));
-                    vfs.fillStat(n_idx, st);
-                    res = 0;
-                } else {
-                    res = errno_mod.toReturn(.ENOENT);
-                }
-            }
+            const flags: u32 = @truncate(a4);
+            res = handleStatPath(dirfd, path_str, stat_ptr, flags);
         },
 
         SYS_BRK => {
@@ -561,7 +581,11 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
             } else {
-                switch (req) {
+                const entry = &cur_task.fd_table[fd];
+                if (entry.kind != .CONSOLE_IN and entry.kind != .CONSOLE_OUT and entry.kind != .CONSOLE_ERR) {
+                    res = errno_mod.toReturn(.ENOTTY);
+                } else {
+                    switch (req) {
                     tty.TCGETS => {
                         if (!validateUserBuffer(arg, @sizeOf(tty.LinuxTermios))) {
                             res = errno_mod.toReturn(.EFAULT);
@@ -611,6 +635,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                     else => res = errno_mod.toReturn(.ENOTTY),
                 }
             }
+        }
         },
 
         SYS_PREAD64 => {
@@ -642,6 +667,8 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             const iov_cnt = a3;
             if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
+            } else if (iov_cnt > 1024) {
+                res = errno_mod.toReturn(.EINVAL);
             } else if (!validateUserBuffer(iov_ptr, iov_cnt * @sizeOf(vfs.LinuxIovec))) {
                 res = errno_mod.toReturn(.EFAULT);
             } else {
@@ -649,8 +676,10 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 var total: usize = 0;
                 for (iovs) |iov| {
                     if (iov.iov_len == 0) continue;
-                    // Read into each iov
-                    // Delegate to sys_read logic
+                    if (!validateUserBuffer(iov.iov_base, iov.iov_len)) {
+                        res = errno_mod.toReturn(.EFAULT);
+                        break :blk;
+                    }
                     const r = handleReadDirect(fd, iov.iov_base, iov.iov_len);
                     if (r < 0) {
                         res = r;
@@ -669,6 +698,8 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             const iov_cnt = a3;
             if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
                 res = errno_mod.toReturn(.EBADF);
+            } else if (iov_cnt > 1024) {
+                res = errno_mod.toReturn(.EINVAL);
             } else if (!validateUserBuffer(iov_ptr, iov_cnt * @sizeOf(vfs.LinuxIovec))) {
                 res = errno_mod.toReturn(.EFAULT);
             } else {
@@ -676,6 +707,10 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 var total: usize = 0;
                 for (iovs) |iov| {
                     if (iov.iov_len == 0) continue;
+                    if (!validateUserBuffer(iov.iov_base, iov.iov_len)) {
+                        res = errno_mod.toReturn(.EFAULT);
+                        break :blk;
+                    }
                     const w = handleWriteDirect(fd, iov.iov_base, iov.iov_len);
                     if (w < 0) {
                         res = w;
@@ -788,11 +823,12 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             }
         },
 
-        SYS_GETPID => res = @intCast(cur_task.pid),
+        SYS_GETPID => res = @intCast(if (cur_task.pid != 0) cur_task.pid else 1),
         SYS_GETPPID => res = @intCast(cur_task.parent_pid),
-        SYS_GETPGID => res = @intCast(cur_task.pgid),
+        SYS_GETPGID, SYS_GETPGRP => res = @intCast(cur_task.pgid),
         SYS_GETUID, SYS_GETGID, SYS_GETEUID, SYS_GETEGID => res = 0,
-        SYS_GETTID => res = @intCast(cur_task.pid),
+        SYS_GETTID => res = @intCast(if (cur_task.pid != 0) cur_task.pid else 1),
+        SYS_SET_ROBUST_LIST, SYS_PRLIMIT64 => res = 0,
         SYS_SET_TID_ADDRESS => {
             res = @intCast(sysSetTidAddress(a1));
         },
@@ -1090,8 +1126,8 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 uts.* = .{};
                 copyFixed(&uts.sysname, "Linux");
                 copyFixed(&uts.nodename, "tinux");
-                copyFixed(&uts.release, "6.12.0-tinux");
-                copyFixed(&uts.version, "#1 SMP PREEMPT_DYNAMIC");
+                copyFixed(&uts.release, "6.6.0-tinux");
+                copyFixed(&uts.version, "#1 SMP PREEMPT Tinux 2026");
                 copyFixed(&uts.machine, "x86_64");
                 copyFixed(&uts.domainname, "(none)");
                 res = 0;
@@ -1265,16 +1301,34 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
     return frame;
 }
 
-fn handleOpen(path_str: []const u8, flags: u32, mode: u32) isize {
+fn handleOpenat(dirfd: isize, path_str: []const u8, flags: u32, mode: u32) isize {
     const cur_task = task.currentTask();
+    if (path_str.len == 0) return errno_mod.toReturn(.ENOENT);
+
+    var base_dir: []const u8 = "";
+    if (path_str[0] == '/') {
+        base_dir = "";
+    } else if (dirfd == vfs.AT_FDCWD) {
+        base_dir = cur_task.cwd();
+    } else if (dirfd >= 0 and dirfd < vfs.MAX_OPEN_FILES) {
+        const ufd: usize = @intCast(dirfd);
+        if (cur_task.fd_table[ufd].kind != .VFS_FILE) return errno_mod.toReturn(.ENOTDIR);
+        const dnode = vfs.getNode(cur_task.fd_table[ufd].node_idx);
+        if (!dnode.isDir()) return errno_mod.toReturn(.ENOTDIR);
+        base_dir = dnode.name();
+    } else {
+        return errno_mod.toReturn(.EBADF);
+    }
+
     procfs.refreshDynamicNodes();
     var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
-    const resolved = vfs.resolveTaskPath(cur_task.cwd(), path_str, &path_buf);
+    const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);
 
     var node_idx = vfs.lookup(resolved);
     const creat = (flags & vfs.O_CREAT) != 0;
     const excl = (flags & vfs.O_EXCL) != 0;
     const trunc = (flags & vfs.O_TRUNC) != 0;
+    const is_dir = (flags & vfs.O_DIRECTORY) != 0;
 
     if (node_idx == null) {
         if (creat) {
@@ -1285,10 +1339,17 @@ fn handleOpen(path_str: []const u8, flags: u32, mode: u32) isize {
             return errno_mod.toReturn(.ENOENT);
         }
     } else {
+        const target_node = vfs.getNode(node_idx.?);
         if (creat and excl) {
             return errno_mod.toReturn(.EEXIST);
         }
-        if (trunc and !vfs.getNode(node_idx.?).isDir()) {
+        if (is_dir and !target_node.isDir()) {
+            return errno_mod.toReturn(.ENOTDIR);
+        }
+        if (target_node.isDir() and ((flags & 0x03) == vfs.O_WRONLY or (flags & 0x03) == vfs.O_RDWR)) {
+            return errno_mod.toReturn(.EISDIR);
+        }
+        if (trunc and !target_node.isDir()) {
             vfs.truncateNode(node_idx.?);
         }
     }
@@ -1313,6 +1374,100 @@ fn handleOpen(path_str: []const u8, flags: u32, mode: u32) isize {
         return @intCast(fd);
     }
     return errno_mod.toReturn(.EMFILE);
+}
+
+fn handleOpen(path_str: []const u8, flags: u32, mode: u32) isize {
+    return handleOpenat(vfs.AT_FDCWD, path_str, flags, mode);
+}
+
+fn handleFstat(fd: usize, stat_ptr: usize) isize {
+    const cur_task = task.currentTask();
+    if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
+        return errno_mod.toReturn(.EBADF);
+    }
+    if (!validateUserBuffer(stat_ptr, @sizeOf(vfs.LinuxStat))) {
+        return errno_mod.toReturn(.EFAULT);
+    }
+    const entry = &cur_task.fd_table[fd];
+    const st = @as(*vfs.LinuxStat, @ptrFromInt(stat_ptr));
+    switch (entry.kind) {
+        .CONSOLE_IN, .CONSOLE_OUT, .CONSOLE_ERR => {
+            st.* = .{
+                .st_mode = vfs.S_IFCHR | 0o666,
+                .st_rdev = 5,
+            };
+            return 0;
+        },
+        .VFS_FILE => {
+            vfs.fillStat(entry.node_idx, st);
+            return 0;
+        },
+        .PIPE_READ, .PIPE_WRITE => {
+            st.* = .{
+                .st_mode = vfs.S_IFIFO | 0o600,
+            };
+            return 0;
+        },
+        .SOCKET => {
+            st.* = .{
+                .st_mode = vfs.S_IFSOCK | 0o666,
+            };
+            return 0;
+        },
+        else => return errno_mod.toReturn(.EBADF),
+    }
+}
+
+fn handleStatPath(dirfd: isize, path_str: []const u8, stat_ptr: usize, flags: u32) isize {
+    const cur_task = task.currentTask();
+    if (!validateUserBuffer(stat_ptr, @sizeOf(vfs.LinuxStat))) {
+        return errno_mod.toReturn(.EFAULT);
+    }
+
+    if (path_str.len == 0) {
+        if ((flags & AT_EMPTY_PATH) != 0) {
+            if (dirfd == vfs.AT_FDCWD) {
+                var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+                const resolved = vfs.resolveTaskPath("", cur_task.cwd(), &path_buf);
+                if (vfs.lookup(resolved)) |n_idx| {
+                    const st = @as(*vfs.LinuxStat, @ptrFromInt(stat_ptr));
+                    vfs.fillStat(n_idx, st);
+                    return 0;
+                }
+                return errno_mod.toReturn(.ENOENT);
+            } else if (dirfd >= 0 and dirfd < vfs.MAX_OPEN_FILES) {
+                return handleFstat(@intCast(dirfd), stat_ptr);
+            } else {
+                return errno_mod.toReturn(.EBADF);
+            }
+        }
+        return errno_mod.toReturn(.ENOENT);
+    }
+
+    var base_dir: []const u8 = "";
+    if (path_str[0] == '/') {
+        base_dir = "";
+    } else if (dirfd == vfs.AT_FDCWD) {
+        base_dir = cur_task.cwd();
+    } else if (dirfd >= 0 and dirfd < vfs.MAX_OPEN_FILES) {
+        const ufd: usize = @intCast(dirfd);
+        if (cur_task.fd_table[ufd].kind != .VFS_FILE) return errno_mod.toReturn(.ENOTDIR);
+        const dnode = vfs.getNode(cur_task.fd_table[ufd].node_idx);
+        if (!dnode.isDir()) return errno_mod.toReturn(.ENOTDIR);
+        base_dir = dnode.name();
+    } else {
+        return errno_mod.toReturn(.EBADF);
+    }
+
+    procfs.refreshDynamicNodes();
+    var path_buf: [vfs.MAX_PATH_LEN]u8 = undefined;
+    const resolved = vfs.resolveTaskPath(base_dir, path_str, &path_buf);
+    if (vfs.lookup(resolved)) |n_idx| {
+        const st = @as(*vfs.LinuxStat, @ptrFromInt(stat_ptr));
+        vfs.fillStat(n_idx, st);
+        return 0;
+    }
+    return errno_mod.toReturn(.ENOENT);
 }
 
 fn handleReadDirect(fd: usize, buf_ptr: usize, count: usize) isize {

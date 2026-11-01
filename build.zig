@@ -8,8 +8,8 @@ pub fn build(b: *std.Build) void {
     });
     const optimize = b.standardOptimizeOption(.{});
 
-    // Milestone task option (default: TASK-005)
-    const task_str = b.option([]const u8, "task", "Milestone task to run (default: TASK-005)") orelse "TASK-005";
+    // Milestone task option (default: TASK-006)
+    const task_str = b.option([]const u8, "task", "Milestone task to run (default: TASK-006)") orelse "TASK-006";
     ensureTaskConfig(task_str);
 
     // Automatic clean-room fallbacks: ensure empty fallbacks exist in .cache/
@@ -101,6 +101,8 @@ fn ensureInitramfsFallback() void {
 
 fn ensureInitTestFallback() void {
     const cwd = std.fs.cwd();
+    cwd.deleteFile("init_test") catch {};
+    cwd.deleteFile("init_test.o") catch {};
     cwd.deleteFile("src/proc/init_test.elf") catch {};
     cwd.deleteFile("src/proc/init_test.elf.o") catch {};
     cwd.makePath(".cache") catch {};

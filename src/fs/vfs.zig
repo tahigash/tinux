@@ -218,9 +218,10 @@ pub fn init() void {
     _ = registerNode("tmp", S_IFDIR | 0o777, "");
     _ = registerNode("mnt", S_IFDIR | 0o755, "");
 
-    // Register /dev/tty and /dev/console as character devices (TASK-012)
+    // Register /dev/tty, /dev/console, and /dev/null as character devices
     _ = registerNode("dev/tty", S_IFCHR | 0o666, "");
     _ = registerNode("dev/console", S_IFCHR | 0o666, "");
+    _ = registerNode("dev/null", S_IFCHR | 0o666, "");
 }
 
 pub fn registerNode(norm_path: []const u8, mode: u32, data: []const u8) usize {
