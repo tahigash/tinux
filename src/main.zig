@@ -401,7 +401,7 @@ fn runFullKernel(target_task: TaskId) noreturn {
         };
 
         const pid1_task = task.initPid1(pid1_pml4, loaded.initial_brk, init_binary_name);
-        _ = pid1_task;
+        pid1_task.setCmdline(&argv);
 
         serial.print("[TINUX_INIT] Spawning PID 1 ({s} /etc/rc.sh)...\n", .{init_binary_name});
         syscall_arch.enterUserMode(loaded.entry_rip, loaded.user_rsp);

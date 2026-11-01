@@ -74,6 +74,7 @@ pub const SYS_RMDIR: u64 = 84;
 pub const SYS_CREAT: u64 = 85;
 pub const SYS_UNLINK: u64 = 87;
 pub const SYS_READLINK: u64 = 89;
+pub const SYS_GETTIMEOFDAY: u64 = 96;
 pub const SYS_GETUID: u64 = 102;
 pub const SYS_GETGID: u64 = 104;
 pub const SYS_GETEUID: u64 = 107;
@@ -133,6 +134,14 @@ pub const LinuxTimespec = extern struct {
     tv_nsec: i64 align(1) = 0,
     comptime {
         std.debug.assert(@sizeOf(LinuxTimespec) == 16);
+    }
+};
+
+pub const LinuxTimeval = extern struct {
+    tv_sec: i64 align(1) = 0,
+    tv_usec: i64 align(1) = 0,
+    comptime {
+        std.debug.assert(@sizeOf(LinuxTimeval) == 16);
     }
 };
 
@@ -880,18 +889,25 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 res = errno_mod.toReturn(.EFAULT);
             } else {
                 const ts = @as(*const LinuxTimespec, @ptrFromInt(req_ptr));
-                const total_ms = (@as(u64, @intCast(ts.tv_sec)) * 1000) + (@as(u64, @intCast(ts.tv_nsec)) / 1_000_000);
-                const wait_ticks = @min(@max((total_ms + 9) / 10, 1), 50);
+                if (ts.tv_sec < 0 or ts.tv_nsec < 0 or ts.tv_nsec >= 1_000_000_000) {
+                    res = errno_mod.toReturn(.EINVAL);
+                } else {
+                    const sec_u: u64 = @intCast(ts.tv_sec);
+                    const nsec_u: u64 = @intCast(ts.tv_nsec);
+                    const duration_ticks = sec_u * timer.HZ + (nsec_u + 9_999_999) / 10_000_000;
+                    const wait_ticks = @max(duration_ticks, 1);
 
-                cur_task.sleep_wake_tick = timer.getTicks() + wait_ticks;
-                cur_task.state = .WAITING_SLEEP;
+                    cur_task.wake_tick = timer.getTicks() + wait_ticks;
+                    cur_task.sleep_wake_tick = cur_task.wake_tick;
+                    cur_task.state = .WAITING_SLEEP;
 
-                frame.rax = 0; // Return 0 upon wake
-                cur_task.saved_frame = frame;
+                    frame.rax = 0; // Return 0 upon wake
+                    cur_task.saved_frame = frame;
 
-                const next_idx = task.scheduleNextOrWait();
-                task.activateTask(next_idx);
-                return task.tasks[next_idx].saved_frame;
+                    const next_idx = task.scheduleNextOrWait();
+                    task.activateTask(next_idx);
+                    return task.tasks[next_idx].saved_frame;
+                }
             }
         },
 
@@ -903,6 +919,25 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         SYS_SET_ROBUST_LIST, SYS_PRLIMIT64 => res = 0,
         SYS_SET_TID_ADDRESS => {
             res = @intCast(sysSetTidAddress(a1));
+        },
+
+        SYS_GETTIMEOFDAY => {
+            const tv_ptr = a1;
+            const tz_ptr = a2;
+            _ = tz_ptr;
+            if (tv_ptr != 0) {
+                if (!validateUserBuffer(tv_ptr, @sizeOf(LinuxTimeval))) {
+                    res = errno_mod.toReturn(.EFAULT);
+                } else {
+                    const tv = @as(*LinuxTimeval, @ptrFromInt(tv_ptr));
+                    const current_ticks = timer.getTicks();
+                    tv.tv_sec = @intCast(current_ticks / timer.HZ);
+                    tv.tv_usec = @intCast((current_ticks % timer.HZ) * 10_000);
+                    res = 0;
+                }
+            } else {
+                res = 0;
+            }
         },
 
         SYS_SOCKET => {
@@ -1163,6 +1198,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             };
 
             const elf_data = vfs.getNode(exec_node_idx).slice();
+            cur_task.setCmdline(current_argv);
             const new_pml4 = vmm.createFreshUserPml4() orelse {
                 res = errno_mod.toReturn(.ENOMEM);
                 break :blk;

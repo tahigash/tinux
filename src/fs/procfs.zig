@@ -9,7 +9,7 @@ var meminfo_buf: [256]u8 = undefined;
 var uptime_buf: [64]u8 = undefined;
 var proc_stat_bufs: [task.MAX_TASKS][256]u8 = undefined;
 var proc_status_bufs: [task.MAX_TASKS][256]u8 = undefined;
-var proc_cmdline_bufs: [task.MAX_TASKS][64]u8 = undefined;
+var proc_cmdline_bufs: [task.MAX_TASKS][128]u8 = undefined;
 var net_tcp_buf: [1024]u8 = undefined;
 var syscalls_buf: [4096]u8 = undefined;
 var strace_buf: [256]u8 = undefined;
@@ -63,7 +63,7 @@ pub fn refreshDynamicNodes() void {
     const current_ticks = timer.getTicks();
     const sec = current_ticks / timer.HZ;
     const centi = (current_ticks % timer.HZ);
-    const uptime_slice = std.fmt.bufPrint(&uptime_buf, "{d}.{d:0>2} {d}.{d:0>2}\n", .{ sec, centi, sec, centi }) catch "0.00 0.00\n";
+    const uptime_slice = std.fmt.bufPrint(&uptime_buf, "{d}.{d:0>2} 0.00\n", .{ sec, centi }) catch "0.00 0.00\n";
     _ = vfs.registerNode("proc/uptime", vfs.S_IFREG | 0o444, uptime_slice);
 
     // /proc/syscalls for profiler
@@ -78,6 +78,24 @@ pub fn refreshDynamicNodes() void {
 }
 
 pub fn syncProcessNodes() void {
+    // Purge stale numeric process nodes for tasks that no longer exist
+    for (&vfs.nodes) |*n| {
+        if (n.in_use and std.mem.startsWith(u8, n.name(), "proc/")) {
+            const rest = n.name()["proc/".len..];
+            if (rest.len > 0 and rest[0] >= '0' and rest[0] <= '9') {
+                const slash_idx = std.mem.indexOfScalar(u8, rest, '/');
+                const pid_str = if (slash_idx) |idx| rest[0..idx] else rest;
+                if (std.fmt.parseInt(usize, pid_str, 10)) |p| {
+                    if (task.getTaskByPid(p) == null) {
+                        n.in_use = false;
+                        n.name_len = 0;
+                        n.size = 0;
+                    }
+                } else |_| {}
+            }
+        }
+    }
+
     // Traverse active tasks and update /proc/[pid]/...
     for (&task.tasks, 0..) |*t, idx| {
         if (t.state != .UNUSED and t.pid > 0) {
@@ -88,16 +106,17 @@ pub fn syncProcessNodes() void {
             const state_char: u8 = switch (t.state) {
                 .RUNNING, .READY => 'R',
                 .ZOMBIE => 'Z',
-                else => 'S',
+                else => if (t.pid == 1) 'R' else 'S',
             };
 
-            // 1. /proc/[pid]/stat
+            // 1. /proc/[pid]/stat (24 tokens per SPEC_TASK_010.md Section 3.2)
             var stat_path_buf: [32]u8 = undefined;
             const stat_path = std.fmt.bufPrint(&stat_path_buf, "proc/{d}/stat", .{t.pid}) catch continue;
+            const pgrp = if (t.pgid != 0) t.pgid else t.pid;
             const stat_content = std.fmt.bufPrint(
                 &proc_stat_bufs[idx],
-                "{d} ({s}) {c} {d} {d} 1 0 -1 4194304 0 0 0 0 1 1 0 0 20 0 1 0 1 4194304 128 18446744073709551615 4194304 4200000 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n",
-                .{ t.pid, t.comm(), state_char, t.parent_pid, t.pgid },
+                "{d} ({s}) {c} {d} {d} 1 0 1 0 0 0 0 0 1 1 0 0 20 0 1 0 1 409600 100\n",
+                .{ t.pid, t.comm(), state_char, t.parent_pid, pgrp },
             ) catch "";
             _ = vfs.registerNode(stat_path, vfs.S_IFREG | 0o444, stat_content);
 
@@ -114,7 +133,7 @@ pub fn syncProcessNodes() void {
             // 3. /proc/[pid]/cmdline
             var cmdline_path_buf: [32]u8 = undefined;
             const cmdline_path = std.fmt.bufPrint(&cmdline_path_buf, "proc/{d}/cmdline", .{t.pid}) catch continue;
-            const cmd_slice = std.fmt.bufPrint(&proc_cmdline_bufs[idx], "{s}\x00", .{t.comm()}) catch "";
+            const cmd_slice = std.fmt.bufPrint(&proc_cmdline_bufs[idx], "{s}\x00", .{t.cmdline()}) catch "";
             _ = vfs.registerNode(cmdline_path, vfs.S_IFREG | 0o444, cmd_slice);
         }
     }

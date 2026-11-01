@@ -58,12 +58,12 @@ pub fn sendEoi(irq: u8) void {
 }
 
 pub fn onTick() void {
-    const now = @atomicRmw(u64, &ticks, .Add, 1, .seq_cst) + 1;
+    _ = @atomicRmw(u64, &ticks, .Add, 1, .seq_cst);
     // Poll UART in case an edge was missed
     const serial = @import("serial.zig");
     serial.pollRx();
 
-    task.wakeSleepingTasks(now);
+    task.tickSleepWaiters();
     sendEoi(0);
 }
 

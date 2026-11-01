@@ -73,6 +73,7 @@ pub const Task = struct {
     wait_sock_idx: usize = 0,
     wait_futex_paddr: usize = 0,
     wait_epoll_idx: usize = 0,
+    wake_tick: u64 = 0,
     sleep_wake_tick: u64 = 0,
     alarm_wake_tick: u64 = 0,
     clear_child_tid: usize = 0,
@@ -80,6 +81,8 @@ pub const Task = struct {
     cwd_len: usize = 1,
     comm_buf: [32]u8 = [_]u8{0} ** 32,
     comm_len: usize = 0,
+    cmdline_buf: [128]u8 = [_]u8{0} ** 128,
+    cmdline_len: usize = 0,
     fd_table: [vfs.MAX_OPEN_FILES]vfs.FdEntry = [_]vfs.FdEntry{.{}} ** vfs.MAX_OPEN_FILES,
 
     pub fn kstackTop(self: *const Task) usize {
@@ -101,6 +104,27 @@ pub const Task = struct {
     pub fn comm(self: *const Task) []const u8 {
         if (self.comm_len == 0) return "tinux_task";
         return self.comm_buf[0..self.comm_len];
+    }
+
+    pub fn setCmdline(self: *Task, argv: []const []const u8) void {
+        @memset(&self.cmdline_buf, 0);
+        var pos: usize = 0;
+        for (argv, 0..) |arg, i| {
+            if (i > 0 and pos < self.cmdline_buf.len) {
+                self.cmdline_buf[pos] = ' ';
+                pos += 1;
+            }
+            const copy_len = @min(arg.len, self.cmdline_buf.len - pos);
+            @memcpy(self.cmdline_buf[pos .. pos + copy_len], arg[0..copy_len]);
+            pos += copy_len;
+            if (pos >= self.cmdline_buf.len) break;
+        }
+        self.cmdline_len = pos;
+    }
+
+    pub fn cmdline(self: *const Task) []const u8 {
+        if (self.cmdline_len == 0) return self.comm();
+        return self.cmdline_buf[0..self.cmdline_len];
     }
 
     pub fn closeAllFds(self: *Task) void {
@@ -227,6 +251,8 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
         .cwd_len = parent.cwd_len,
         .comm_buf = parent.comm_buf,
         .comm_len = parent.comm_len,
+        .cmdline_buf = parent.cmdline_buf,
+        .cmdline_len = parent.cmdline_len,
         .fd_table = parent.fd_table,
     };
 
@@ -279,9 +305,14 @@ pub fn wakePipeWaiters(pipe_idx: usize) void {
     }
 }
 
+pub fn tickSleepWaiters() void {
+    const timer = @import("../drivers/timer.zig");
+    wakeSleepingTasks(timer.getTicks());
+}
+
 pub fn wakeSleepingTasks(now_ticks: u64) void {
     for (&tasks) |*t| {
-        if (t.state == .WAITING_SLEEP and now_ticks >= t.sleep_wake_tick) {
+        if (t.state == .WAITING_SLEEP and (now_ticks >= t.wake_tick or now_ticks >= t.sleep_wake_tick)) {
             t.state = .READY;
         }
     }

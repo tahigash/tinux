@@ -18,7 +18,7 @@
 - [x] **TASK-007**: `docs/specs/SPEC_TASK_007.md`: Multi-Process Management (`Task` Table, `cloneUserPml4`), `fork`/`execve`/`wait4`
 - [x] **TASK-008**: `docs/specs/SPEC_TASK_008.md`: IPC Pipes (`pipe2`), I/O Redirection (`dup2`/`O_CLOEXEC`), and `/proc` Pseudo-FS
 - [x] **TASK-009**: `docs/specs/SPEC_TASK_009.md`: Writable `tmpfs` (Create/Write/Truncate/Unlink/Mkdir), and `getdents64`
-- [ ] **TASK-010**: `docs/specs/SPEC_TASK_010.md`: Hardware Timer (8259A PIC + 8254 PIT 100Hz), `nanosleep`, and `/proc/[pid]/stat`
+- [x] **TASK-010**: `docs/specs/SPEC_TASK_010.md`: Hardware Timer (8259A PIC + 8254 PIT 100Hz), `nanosleep`, and `/proc/[pid]/stat`
 - [ ] **TASK-011**: `docs/specs/SPEC_TASK_011.md`: Dynamic ELF Loader (`PT_INTERP` / `ld-musl-x86_64.so.1` Co-Loading)
 - [ ] **TASK-012**: `docs/specs/SPEC_TASK_012.md`: Bidirectional TTY Console (IRQ4 RX + Line Discipline + `termios` ioctls)
 - [ ] **TASK-013**: `docs/specs/SPEC_TASK_013.md`: Linux Socket API (`AF_INET` 127.0.0.1 Loopback & `AF_UNIX` IPC)

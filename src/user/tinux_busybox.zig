@@ -308,8 +308,26 @@ fn cmdPs() usize {
                         if (lp < rp and rp + 2 < sline.len) {
                             const comm = sline[lp + 1 .. rp];
                             const st = sline[rp + 2 .. rp + 3];
+
+                            // Read /proc/{s}/cmdline for full command line
+                            var cmd_display: []const u8 = comm;
+                            var cpath: [64]u8 = undefined;
+                            const cp = std.fmt.bufPrint(&cpath, "/proc/{s}/cmdline", .{name}) catch "";
+                            const cfd = openPath(cp, 0, 0);
+                            var cbuf: [128]u8 = undefined;
+                            if (cfd >= 0) {
+                                const cn = sys3(0, @intCast(cfd), @intFromPtr(&cbuf), cbuf.len);
+                                _ = sys1(3, @intCast(cfd));
+                                if (cn > 0) {
+                                    const full_cmd = std.mem.sliceTo(cbuf[0..@intCast(cn)], 0);
+                                    if (full_cmd.len > 0) {
+                                        cmd_display = full_cmd;
+                                    }
+                                }
+                            }
+
                             var out: [128]u8 = undefined;
-                            const row = std.fmt.bufPrint(&out, "{s: >5} 0         4096 {s}    {s}\n", .{ name, st, comm }) catch "";
+                            const row = std.fmt.bufPrint(&out, "{s: >5} 0          400 {s}    {s}\n", .{ name, st, cmd_display }) catch "";
                             puts(row);
                         }
                     }
@@ -374,10 +392,14 @@ fn expandLine(raw: []const u8, out: *[512]u8) []const u8 {
                 i += 2;
                 continue;
             } else if (env_k_len > 0 and std.mem.startsWith(u8, raw[i + 1 ..], env_k_buf[0..env_k_len])) {
-                @memcpy(out[w .. w + env_v_len], env_v_buf[0..env_v_len]);
-                w += env_v_len;
-                i += 1 + env_k_len;
-                continue;
+                const next_idx = i + 1 + env_k_len;
+                const is_ident = if (next_idx < raw.len) (std.ascii.isAlphanumeric(raw[next_idx]) or raw[next_idx] == '_') else false;
+                if (!is_ident) {
+                    @memcpy(out[w .. w + env_v_len], env_v_buf[0..env_v_len]);
+                    w += env_v_len;
+                    i = next_idx;
+                    continue;
+                }
             }
         }
         out[w] = raw[i];
@@ -482,8 +504,16 @@ fn runShellLine(raw_line: []const u8) void {
     if (ntok == 0) return;
     const cmd = toks[0];
 
-    // Assignment lines
+    // Assignment lines: VAR=val
     if (std.mem.indexOfScalar(u8, cmd, '=') != null and !std.mem.eql(u8, cmd, "export")) {
+        if (std.mem.indexOfScalar(u8, cmd, '=')) |eq| {
+            const k = cmd[0..eq];
+            const v = std.mem.trim(u8, cmd[eq + 1 ..], "\"");
+            env_k_len = @min(k.len, 64);
+            @memcpy(env_k_buf[0..env_k_len], k[0..env_k_len]);
+            env_v_len = @min(v.len, 64);
+            @memcpy(env_v_buf[0..env_v_len], v[0..env_v_len]);
+        }
         return;
     }
     if (std.mem.eql(u8, cmd, "export") and ntok >= 2) {
@@ -532,9 +562,13 @@ fn runShellLine(raw_line: []const u8) void {
         return;
     }
     if (std.mem.eql(u8, cmd, "kill") or std.mem.eql(u8, cmd, "/bin/kill")) {
+        var sig: usize = 9;
+        if (ntok >= 3 and toks[1].len > 1 and toks[1][0] == '-') {
+            sig = std.fmt.parseInt(usize, toks[1][1..], 10) catch 9;
+        }
         const pid_str = toks[ntok - 1];
         const kpid = std.fmt.parseInt(usize, pid_str, 10) catch 0;
-        if (kpid > 0) _ = sys2(62, kpid, 9);
+        if (kpid > 0) _ = sys2(62, kpid, sig);
         return;
     }
 
@@ -599,7 +633,12 @@ export fn bbMain(initial_rsp: [*]const u64) callconv(.C) noreturn {
     } else if (std.mem.eql(u8, app, "rmdir")) {
         rc = rmdirMain(slice);
     } else if (std.mem.eql(u8, app, "sleep")) {
-        var ts = LinuxTimespec{ .tv_sec = 1, .tv_nsec = 0 };
+        var sec: i64 = 1;
+        if (slice.len >= 2) {
+            sec = std.fmt.parseInt(i64, slice[1], 10) catch 1;
+            if (sec < 0) sec = 0;
+        }
+        var ts = LinuxTimespec{ .tv_sec = sec, .tv_nsec = 0 };
         _ = sys2(35, @intFromPtr(&ts), 0);
     } else if (std.mem.eql(u8, app, "mount") and slice.len >= 3) {
         var b_src: [128]u8 = undefined;

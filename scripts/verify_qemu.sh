@@ -179,17 +179,19 @@ EOF
         10)
             cat << 'EOF' > "${INITRAMFS_ROOT}/etc/rc.sh"
 #!/bin/sh
-echo "[TINUX_SH] Launching background sleep process..."
-/bin/sleep 1 &
+echo "[TINUX_SH] Testing hardware timer (PIT 100Hz) and nanosleep..."
+/bin/sleep 1
+echo "[TINUX_TIMER] Uptime after 1s sleep:"
+/bin/cat /proc/uptime
+echo "[TINUX_SH] Spawning background job: /bin/sleep 5 &"
+/bin/sleep 5 &
 BG_PID=$!
-echo "[TINUX_SH] Running ps to inspect active processes via /proc/[pid]/stat:"
+echo "[TINUX_PS] Process table while background job is sleeping:"
 /bin/ps
-echo "[TINUX_SH] Sending SIGKILL (kill -9) to background process $BG_PID..."
+echo "[TINUX_KILL] Sending SIGKILL to background process..."
 kill -9 $BG_PID
 wait $BG_PID 2>/dev/null
-echo "[TINUX_SH] Inspecting /proc/uptime after timer ticks:"
-/bin/cat /proc/uptime
-echo "[TINUX_PROC] Hardware timer, nanosleep, /proc/[pid]/stat, ps, and kill verified!"
+echo "[TINUX_PROC] Hardware timer, nanosleep, /proc/[pid]/stat (ps), and kill verified!"
 exit 0
 EOF
             ;;
