@@ -36,6 +36,19 @@ pub const LinuxEpollEvent = extern struct {
     data: u64 align(1) = 0,
 };
 
+pub const LinuxTimespec = extern struct {
+    tv_sec: i64 = 0,
+    tv_nsec: i64 = 0,
+};
+
+fn sleepMs(ms: usize) void {
+    const ts = LinuxTimespec{
+        .tv_sec = @intCast(ms / 1000),
+        .tv_nsec = @intCast((ms % 1000) * 1_000_000),
+    };
+    _ = sys2(35, @intFromPtr(&ts), 0);
+}
+
 pub export fn _start() callconv(.Naked) noreturn {
     asm volatile (
         \\ andq $-16, %rsp
@@ -202,21 +215,15 @@ fn challengeFutex() void {
     );
     if (clone2 <= 0) exitFail(107, "clone waiter 2 failed");
 
-    // Give both threads time to block in futex (yield via sys_sched_yield or busy-spin)
-    var spin: usize = 0;
-    while (spin < 500000) : (spin += 1) {
-        asm volatile ("pause");
-    }
+    // Yield to child threads so they run and block in FUTEX_WAIT
+    sleepMs(50);
 
     // 3. Wake with val = 1: MUST wake exactly 1 waiter
     const woken1 = sys3(202, @intFromPtr(&futex_multi_wait), FUTEX_WAKE, 1);
     if (woken1 != 1) exitFail(108, "sys_futex wake(val=1) did not return 1");
 
-    // Wait for the woken waiter to update counter
-    spin = 0;
-    while (spin < 500000 and @atomicLoad(i32, &waiter1_woken, .seq_cst) == 0 and @atomicLoad(i32, &waiter2_woken, .seq_cst) == 0) : (spin += 1) {
-        asm volatile ("pause");
-    }
+    // Yield to let the woken waiter run and update counter
+    sleepMs(50);
 
     const c1 = @atomicLoad(i32, &waiter1_woken, .seq_cst);
     const c2 = @atomicLoad(i32, &waiter2_woken, .seq_cst);
@@ -226,10 +233,8 @@ fn challengeFutex() void {
     const woken2 = sys3(202, @intFromPtr(&futex_multi_wait), FUTEX_WAKE, 2);
     if (woken2 != 1) exitFail(110, "sys_futex wake(val=2) did not return 1 for remaining waiter");
 
-    spin = 0;
-    while (spin < 500000 and (@atomicLoad(i32, &waiter1_woken, .seq_cst) == 0 or @atomicLoad(i32, &waiter2_woken, .seq_cst) == 0)) : (spin += 1) {
-        asm volatile ("pause");
-    }
+    // Yield to let the second waiter run and update counter
+    sleepMs(50);
 
     if (@atomicLoad(i32, &waiter1_woken, .seq_cst) != 1 or @atomicLoad(i32, &waiter2_woken, .seq_cst) != 1) {
         exitFail(111, "both waiters should be woken");
@@ -330,24 +335,35 @@ fn challengeEpoll() void {
     const epfd2 = sys1(291, 0);
     if (epfd2 < 0) exitFail(217, "second epoll_create1 failed");
 
-    var fill_pipes: [16][2]i32 = undefined;
+    var fill_pipes: [8][2]i32 = undefined;
     var i: usize = 0;
-    while (i < 16) : (i += 1) {
+    while (i < 8) : (i += 1) {
         if (sys1(22, @intFromPtr(&fill_pipes[i])) != 0) exitFail(218, "pipe creation failed during fill");
-        var ev_fill = LinuxEpollEvent{ .events = EPOLLIN, .data = i };
-        const add_res = sys4(233, @intCast(epfd2), EPOLL_CTL_ADD, @intCast(fill_pipes[i][0]), @intFromPtr(&ev_fill));
-        if (add_res != 0) exitFail(219, "failed to add up to 16 epoll items");
+        var ev_r = LinuxEpollEvent{ .events = EPOLLIN, .data = i * 2 };
+        if (sys4(233, @intCast(epfd2), EPOLL_CTL_ADD, @intCast(fill_pipes[i][0]), @intFromPtr(&ev_r)) != 0) {
+            exitFail(219, "failed to add pipe read end to epoll");
+        }
+        var ev_w = LinuxEpollEvent{ .events = EPOLLOUT, .data = i * 2 + 1 };
+        if (sys4(233, @intCast(epfd2), EPOLL_CTL_ADD, @intCast(fill_pipes[i][1]), @intFromPtr(&ev_w)) != 0) {
+            exitFail(219, "failed to add pipe write end to epoll");
+        }
     }
 
     // 17th item MUST fail with -ENOSPC (-28)
     var overflow_pipe: [2]i32 = .{ -1, -1 };
-    _ = sys1(22, @intFromPtr(&overflow_pipe));
+    if (sys1(22, @intFromPtr(&overflow_pipe)) != 0) exitFail(220, "overflow pipe creation failed");
     var ev_overflow = LinuxEpollEvent{ .events = EPOLLIN, .data = 17 };
     const rc_enospc = sys4(233, @intCast(epfd2), EPOLL_CTL_ADD, @intCast(overflow_pipe[0]), @intFromPtr(&ev_overflow));
-    if (rc_enospc != ENOSPC) exitFail(220, "17th epoll item did not return -ENOSPC (-28)");
+    if (rc_enospc != ENOSPC) exitFail(221, "17th epoll item did not return -ENOSPC (-28)");
 
-    // Clean up second epoll
+    // Clean up second epoll and pipes
     _ = sys1(3, @intCast(epfd2));
+    _ = sys1(3, @intCast(overflow_pipe[0]));
+    _ = sys1(3, @intCast(overflow_pipe[1]));
+    for (fill_pipes) |p| {
+        _ = sys1(3, @intCast(p[0]));
+        _ = sys1(3, @intCast(p[1]));
+    }
 
     writeStdout("[CHALLENGER14] Step 5: Testing level-triggered readiness transitions & pipe draining...\n");
 
