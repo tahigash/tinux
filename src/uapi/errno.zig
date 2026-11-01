@@ -33,6 +33,7 @@ pub const Errno = error{
     ENOSYS,
     ENOTEMPTY,
     ENOTSOCK,
+    EDESTADDRREQ,
     EOPNOTSUPP,
     EAFNOSUPPORT,
     EADDRINUSE,
@@ -81,6 +82,7 @@ pub const ErrnoCode = enum(u16) {
     ENOSYS = 38,
     ENOTEMPTY = 39,
     ENOTSOCK = 88,
+    EDESTADDRREQ = 89,
     EOPNOTSUPP = 95,
     EAFNOSUPPORT = 97,
     EADDRINUSE = 98,
@@ -130,6 +132,7 @@ pub inline fn toReturn(err: anytype) isize {
         if (err == error.ENOSYS) return -38;
         if (err == error.ENOTEMPTY) return -39;
         if (err == error.ENOTSOCK) return -88;
+        if (err == error.EDESTADDRREQ) return -89;
         if (err == error.EOPNOTSUPP) return -95;
         if (err == error.EAFNOSUPPORT) return -97;
         if (err == error.EADDRINUSE) return -98;
@@ -177,6 +180,7 @@ pub inline fn toReturn(err: anytype) isize {
             .ENOSYS => return -38,
             .ENOTEMPTY => return -39,
             .ENOTSOCK => return -88,
+            .EDESTADDRREQ => return -89,
             .EOPNOTSUPP => return -95,
             .EAFNOSUPPORT => return -97,
             .EADDRINUSE => return -98,

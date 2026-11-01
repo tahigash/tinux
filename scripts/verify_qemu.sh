@@ -34,6 +34,23 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     done
 fi
 
+if ! command -v zig >/dev/null 2>&1; then
+    for candidate_dir in \
+        "/c/Users/takashi/bin/zig-windows-x86_64-0.13.0" \
+        "/c/Users/takashi/bin" \
+        "$HOME/bin/zig-windows-x86_64-0.13.0" \
+        "$HOME/bin" \
+        ".cache/toolchain/zig-windows-x86_64-0.13.0" \
+        ".cache/toolchain/zig-0.13.0" \
+        "$HOME/.local/bin"; do
+        if [[ -f "$candidate_dir/zig.exe" ]] || [[ -f "$candidate_dir/zig" ]]; then
+            export PATH="$candidate_dir:$PATH"
+            break
+        fi
+    done
+fi
+
+
 # ------------------------------------------------------------------------------
 # Pre-Check: Clean-Room License & Binary Guardrail Audit
 # ------------------------------------------------------------------------------
@@ -452,16 +469,26 @@ for cmd in commands:
 '
             ;;
         19)
-            cat << 'EOF'
-echo "[TINUX_SH] Running UDP socket & RFC 1035 DNS resolver test suite..."
-/bin/dns_test
-echo "[TINUX_SH] Inspecting /proc/net/udp and /proc/net/arp:"
-/bin/cat /proc/net/udp
-/bin/cat /proc/net/arp
-echo "[TINUX_DNS_DONE] UDP SOCK_DGRAM and DNS resolution (10.0.2.3:53) verified!"
-exit 0
-EOF
+            "$PYTHON_BIN" -c '
+import sys, time
+commands = [
+    "echo \"[TINUX_SH] Running UDP socket & RFC 1035 DNS resolver test suite...\"\n",
+    "/bin/dns_test\n",
+    "echo \"[TINUX_SH] Inspecting /proc/net/udp and /proc/net/arp:\"\n",
+    "/bin/cat /proc/net/udp\n",
+    "/bin/cat /proc/net/arp\n",
+    "echo \"[TINUX_DNS_DONE] UDP SOCK_DGRAM and DNS resolution (10.0.2.3:53) verified!\"\n",
+    "exit 0\n"
+]
+for cmd in commands:
+    for ch in cmd:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(0.001)
+    time.sleep(0.05)
+'
             ;;
+
         20)
             cat << 'EOF'
 echo "[TINUX_SH] Running SMP multi-core affinity & getcpu verification..."

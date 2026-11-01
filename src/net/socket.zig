@@ -76,10 +76,60 @@ pub const Socket = struct {
     rx_read_pos: usize = 0,
     rx_write_pos: usize = 0,
     rx_count: usize = 0,
+    peer_ip: [4]u8 = .{ 0, 0, 0, 0 },
+    peer_port: u16 = 0,
+    last_rx_ip: [4]u8 = .{ 127, 0, 0, 1 },
+    last_rx_port: u16 = 0,
+    dgram_ready: bool = false,
+    dgram_len: usize = 0,
 };
 
 pub var sockets: [MAX_SOCKETS]Socket = [_]Socket{.{}} ** MAX_SOCKETS;
 var next_ephemeral_port: u16 = 49152;
+
+pub fn ensureBoundPort(idx: usize) u16 {
+    var s = &sockets[idx];
+    if (s.bound_port == 0) {
+        s.bound_port = next_ephemeral_port;
+        next_ephemeral_port +%= 1;
+        if (next_ephemeral_port < 49152) next_ephemeral_port = 49152;
+        if (s.state == .UNBOUND) s.state = .BOUND;
+    }
+    return s.bound_port;
+}
+
+pub fn isDgramReady(port: u16) bool {
+    for (&sockets) |s| {
+        if (s.in_use and s.bound_port == port and s.dgram_ready) return true;
+    }
+    return false;
+}
+
+pub fn deliverUdpDatagram(
+    src_ip: [4]u8,
+    src_port_host: u16,
+    dst_port_host: u16,
+    payload: []const u8,
+) bool {
+    for (&sockets, 0..) |*s, idx| {
+        if (s.in_use and s.domain == AF_INET and s.sock_type == SOCK_DGRAM and s.bound_port == dst_port_host) {
+            const to_copy = @min(payload.len, SOCK_BUF_SIZE);
+            @memcpy(s.rx_buf[0..to_copy], payload[0..to_copy]);
+            s.rx_read_pos = 0;
+            s.rx_write_pos = to_copy;
+            s.rx_count = to_copy;
+            s.dgram_len = to_copy;
+            s.dgram_ready = true;
+            s.last_rx_ip = src_ip;
+            s.last_rx_port = src_port_host;
+            task.wakeSocketReadWaiters(idx);
+            task.wakeEpollWaiters();
+            return true;
+        }
+    }
+    return false;
+}
+
 
 pub fn init() void {
     for (&sockets) |*s| s.* = .{};
@@ -291,6 +341,16 @@ pub fn read(idx: usize, dst: []u8) SockReadResult {
         return .{ .eof = {} };
     }
     var sock = &sockets[idx];
+    if (sock.sock_type == SOCK_DGRAM and sock.proto != 1) {
+        if (sock.dgram_ready) {
+            const to_read = @min(dst.len, sock.dgram_len);
+            @memcpy(dst[0..to_read], sock.rx_buf[0..to_read]);
+            sock.dgram_ready = false;
+            sock.rx_count = 0;
+            return .{ .bytes = to_read };
+        }
+        return .{ .would_block = {} };
+    }
     if (sock.rx_count > 0) {
         const to_read = @min(dst.len, sock.rx_count);
         for (0..to_read) |i| {

@@ -606,6 +606,9 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                     },
                     .SOCKET => {
                         const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
+                        if (socket.sockets[s_idx].sock_type == socket.SOCK_DGRAM and socket.sockets[s_idx].proto != 1) {
+                            virtio_net.pollRx();
+                        }
                         const r = socket.read(s_idx, dst);
                         switch (r) {
                             .bytes => |n| res = @intCast(n),
@@ -676,14 +679,31 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                     },
                     .SOCKET => {
                         const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
-                        const w = socket.write(s_idx, src) catch |err| {
-                            res = errno_mod.toReturn(err);
-                            break :blk;
-                        };
-                        if (socket.sockets[s_idx].peer_idx) |p_idx| {
-                            task.wakeSocketReadWaiters(p_idx);
+                        if (socket.sockets[s_idx].sock_type == socket.SOCK_DGRAM and socket.sockets[s_idx].proto != 1) {
+                            const local_port = socket.ensureBoundPort(s_idx);
+                            if (socket.sockets[s_idx].state != .CONNECTED or socket.sockets[s_idx].peer_port == 0) {
+                                res = errno_mod.toReturn(.EDESTADDRREQ);
+                                break :blk;
+                            }
+                            const dst_ip = socket.sockets[s_idx].peer_ip;
+                            const dst_port = socket.sockets[s_idx].peer_port;
+
+                            if (dst_ip[0] == 127 or std.mem.eql(u8, &dst_ip, &netstack.OUR_IP)) {
+                                _ = socket.deliverUdpDatagram(dst_ip, local_port, dst_port, src);
+                            } else {
+                                _ = netstack.sendUdpPacket(local_port, dst_ip, dst_port, src);
+                            }
+                            res = @intCast(src.len);
+                        } else {
+                            const w = socket.write(s_idx, src) catch |err| {
+                                res = errno_mod.toReturn(err);
+                                break :blk;
+                            };
+                            if (socket.sockets[s_idx].peer_idx) |p_idx| {
+                                task.wakeSocketReadWaiters(p_idx);
+                            }
+                            res = @intCast(w);
                         }
-                        res = @intCast(w);
                     },
                     .BLKDEV => {
                         const n = virtio_blk.writeBytes(entry.offset, src);
@@ -1264,7 +1284,11 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                             res = errno_mod.toReturn(err);
                             break :blk;
                         };
+                        if (socket.sockets[s_idx].sock_type == socket.SOCK_DGRAM and socket.sockets[s_idx].proto != 1) {
+                            procfs.recordUdpHistory(host_port);
+                        }
                         res = 0;
+
                     }
                 } else if (dom == socket.AF_UNIX) {
                     if (!validateUserBuffer(addr_ptr, 2) or addr_len < 2) {
@@ -1385,6 +1409,21 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             } else {
                 const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
                 const dom = socket.sockets[s_idx].domain;
+                if (socket.sockets[s_idx].sock_type == socket.SOCK_DGRAM and socket.sockets[s_idx].proto != 1) {
+                    if (!validateUserBuffer(addr_ptr, @sizeOf(socket.SockAddrIn)) or addr_len < @sizeOf(socket.SockAddrIn)) {
+                        res = errno_mod.toReturn(.EFAULT);
+                    } else {
+                        const sin = @as(*align(1) const socket.SockAddrIn, @ptrFromInt(addr_ptr)).*;
+                        const target_port = std.mem.bigToNative(u16, sin.sin_port);
+                        const target_ip = @as(*const [4]u8, @ptrFromInt(addr_ptr + 4)).*;
+                        _ = socket.ensureBoundPort(s_idx);
+                        socket.sockets[s_idx].peer_ip = target_ip;
+                        socket.sockets[s_idx].peer_port = target_port;
+                        socket.sockets[s_idx].state = .CONNECTED;
+                        res = 0;
+                    }
+                    break :blk;
+                }
                 if (dom == socket.AF_INET) {
                     if (!validateUserBuffer(addr_ptr, @sizeOf(socket.SockAddrIn)) or addr_len < @sizeOf(socket.SockAddrIn)) {
                         res = errno_mod.toReturn(.EFAULT);
@@ -1436,6 +1475,35 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             } else {
                 const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
                 const src = @as([*]const u8, @ptrFromInt(buf_ptr))[0..len];
+                if (socket.sockets[s_idx].sock_type == socket.SOCK_DGRAM and socket.sockets[s_idx].proto != 1) {
+                    const local_port = socket.ensureBoundPort(s_idx);
+                    var dst_ip: [4]u8 = undefined;
+                    var dst_port: u16 = 0;
+                    if (dest_addr_ptr != 0) {
+                        if (dest_addr_len < 16 or !validateUserBuffer(dest_addr_ptr, 16)) {
+                            res = errno_mod.toReturn(.EINVAL);
+                            break :blk;
+                        }
+                        const sin = @as(*align(1) const socket.SockAddrIn, @ptrFromInt(dest_addr_ptr)).*;
+                        dst_port = std.mem.bigToNative(u16, sin.sin_port);
+                        dst_ip = @as(*const [4]u8, @ptrFromInt(dest_addr_ptr + 4)).*;
+                    } else {
+                        if (socket.sockets[s_idx].state != .CONNECTED or socket.sockets[s_idx].peer_port == 0) {
+                            res = errno_mod.toReturn(.EDESTADDRREQ);
+                            break :blk;
+                        }
+                        dst_ip = socket.sockets[s_idx].peer_ip;
+                        dst_port = socket.sockets[s_idx].peer_port;
+                    }
+
+                    if (dst_ip[0] == 127 or std.mem.eql(u8, &dst_ip, &netstack.OUR_IP)) {
+                        _ = socket.deliverUdpDatagram(dst_ip, local_port, dst_port, src);
+                    } else {
+                        _ = netstack.sendUdpPacket(local_port, dst_ip, dst_port, src);
+                    }
+                    res = @intCast(src.len);
+                    break :blk;
+                }
 
                 if (socket.sockets[s_idx].domain == socket.AF_INET and (socket.sockets[s_idx].proto == 1 or socket.sockets[s_idx].sock_type == socket.SOCK_RAW)) {
                     if (dest_addr_ptr == 0 or dest_addr_len < 16 or !validateUserBuffer(dest_addr_ptr, 16)) {
@@ -1486,6 +1554,39 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             } else {
                 const s_idx = if (cur_task.fd_table[fd].sock_idx != 0) cur_task.fd_table[fd].sock_idx else cur_task.fd_table[fd].node_idx;
                 const dst = @as([*]u8, @ptrFromInt(buf_ptr))[0..len];
+
+                if (socket.sockets[s_idx].sock_type == socket.SOCK_DGRAM and socket.sockets[s_idx].proto != 1) {
+                    virtio_net.pollRx();
+                    var s = &socket.sockets[s_idx];
+                    if (s.dgram_ready) {
+                        const n = @min(len, s.dgram_len);
+                        @memcpy(dst[0..n], s.rx_buf[0..n]);
+                        s.dgram_ready = false;
+                        s.rx_count = 0;
+                        if (src_addr_ptr != 0 and addrlen_ptr != 0) {
+                            if (validateUserBuffer(src_addr_ptr, @sizeOf(socket.SockAddrIn)) and validateUserBuffer(addrlen_ptr, 4)) {
+                                const sin_out = socket.SockAddrIn{
+                                    .sin_family = socket.AF_INET,
+                                    .sin_port = std.mem.nativeToBig(u16, s.last_rx_port),
+                                    .sin_addr = std.mem.readInt(u32, &s.last_rx_ip, .little),
+                                };
+                                @as(*socket.SockAddrIn, @ptrFromInt(src_addr_ptr)).* = sin_out;
+                                @as(*u32, @ptrFromInt(addrlen_ptr)).* = @sizeOf(socket.SockAddrIn);
+                            }
+                        }
+                        res = @intCast(n);
+                        break :blk;
+                    } else {
+                        if (s.nonblock or (cur_task.fd_table[fd].flags & vfs.O_NONBLOCK) != 0) {
+                            res = errno_mod.toReturn(.EAGAIN);
+                        } else {
+                            cur_task.state = .WAITING_SOCK_READ;
+                            cur_task.wait_sock_idx = s_idx;
+                            do_block = true;
+                        }
+                        break :blk;
+                    }
+                }
 
                 if (socket.sockets[s_idx].domain == socket.AF_INET and (socket.sockets[s_idx].proto == 1 or socket.sockets[s_idx].sock_type == socket.SOCK_RAW)) {
                     var timeout: usize = 1_000_000;

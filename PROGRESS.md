@@ -26,6 +26,6 @@
 - [x] **TASK-015**: `docs/specs/SPEC_TASK_015.md`: PCI Bus Enumeration, VirtIO-Block DMA Driver (`/dev/vda`), and Persistence
 - [x] **TASK-016**: `docs/specs/SPEC_TASK_016.md`: Persistent USTAR Filesystem (`tarfs`), `sys_mount`/`sys_umount2`/`sys_sync`
 - [x] **TASK-017**: `docs/specs/SPEC_TASK_017.md`: VirtIO-Net PCI Network Driver (TX/RX Virtqueues) and Ping Verification
-- [ ] **TASK-018**: `docs/specs/SPEC_TASK_018.md`: User-Space Signal Delivery, Signal Trampoline, and `rt_sigreturn`
-- [ ] **TASK-019**: `docs/specs/SPEC_TASK_019.md`: UDP/IPv4 Socket Stack (`SOCK_DGRAM`), `/proc/net/udp`, and DNS Resolver
+- [x] **TASK-018**: `docs/specs/SPEC_TASK_018.md`: User-Space Signal Delivery, Signal Trampoline, and `rt_sigreturn`
+- [x] **TASK-019**: `docs/specs/SPEC_TASK_019.md`: UDP/IPv4 Socket Stack (`SOCK_DGRAM`), `/proc/net/udp`, and DNS Resolver
 - [ ] **TASK-020**: `docs/specs/SPEC_TASK_020.md`: Local APIC / IOAPIC Initialization, SMP Multi-Core Boot (`-smp 2`)

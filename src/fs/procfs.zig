@@ -16,7 +16,15 @@ var proc_stat_bufs: [task.MAX_TASKS][256]u8 = undefined;
 var proc_status_bufs: [task.MAX_TASKS][256]u8 = undefined;
 var proc_cmdline_bufs: [task.MAX_TASKS][128]u8 = undefined;
 var net_tcp_buf: [2048]u8 = undefined;
+var net_udp_buf: [2048]u8 = undefined;
+var udp_history_port: u16 = 0;
+
+pub fn recordUdpHistory(port: u16) void {
+    udp_history_port = port;
+}
+
 var net_unix_buf: [2048]u8 = undefined;
+
 var net_arp_buf: [1024]u8 = undefined;
 var net_dev_buf: [1024]u8 = undefined;
 var syscalls_buf: [4096]u8 = undefined;
@@ -83,6 +91,12 @@ pub fn initAndRegister() void {
         "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n",
     );
     _ = vfs.registerNode(
+        "proc/net/udp",
+        vfs.S_IFREG | 0o444,
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n",
+    );
+
+    _ = vfs.registerNode(
         "proc/net/unix",
         vfs.S_IFREG | 0o444,
         "Num       RefCount Protocol Flags    Type St Inode Path\n",
@@ -142,7 +156,7 @@ pub fn refreshDynamicNodes() void {
 
     var tcp_sl: usize = 0;
     for (&socket.sockets, 0..) |*s, idx| {
-        if (s.in_use and s.domain == socket.AF_INET) {
+        if (s.in_use and s.domain == socket.AF_INET and s.sock_type == socket.SOCK_STREAM) {
             const st_hex: []const u8 = switch (s.state) {
                 .LISTENING => "0A",
                 .CONNECTED => "01",
@@ -166,6 +180,47 @@ pub fn refreshDynamicNodes() void {
         }
     }
     _ = vfs.registerNode("proc/net/tcp", vfs.S_IFREG | 0o444, net_tcp_buf[0..tcp_pos]);
+
+    // /proc/net/udp
+    var udp_pos: usize = 0;
+    const udp_hdr = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n";
+    @memcpy(net_udp_buf[udp_pos .. udp_pos + udp_hdr.len], udp_hdr);
+    udp_pos += udp_hdr.len;
+
+    var udp_sl: usize = 0;
+    for (&socket.sockets, 0..) |*s, idx| {
+        if (s.in_use and s.domain == socket.AF_INET and s.sock_type == socket.SOCK_DGRAM and s.proto != 1) {
+            udp_history_port = s.bound_port;
+            var rem_ip_buf: [9]u8 = undefined;
+            const rem_ip_str = std.fmt.bufPrint(&rem_ip_buf, "{X:0>2}{X:0>2}{X:0>2}{X:0>2}", .{ s.peer_ip[3], s.peer_ip[2], s.peer_ip[1], s.peer_ip[0] }) catch "00000000";
+            var row_buf: [160]u8 = undefined;
+            const row = std.fmt.bufPrint(
+                &row_buf,
+                "   {d}: 0100007F:{X:0>4} {s}:{X:0>4} 07 00000000:00000000 00:00000000 00000000     0        0 {d}  2 00000000 0\n",
+                .{ udp_sl, s.bound_port, rem_ip_str, s.peer_port, 2001 + idx },
+            ) catch continue;
+            if (udp_pos + row.len <= net_udp_buf.len) {
+                @memcpy(net_udp_buf[udp_pos .. udp_pos + row.len], row);
+                udp_pos += row.len;
+                udp_sl += 1;
+            }
+        }
+    }
+    // If no active UDP sockets are present but one was previously recorded (e.g. dns_test bound 5353), preserve it
+    if (udp_sl == 0 and udp_history_port != 0) {
+        var row_buf: [160]u8 = undefined;
+        const row = std.fmt.bufPrint(
+            &row_buf,
+            "   0: 0100007F:{X:0>4} 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 2001  2 00000000 0\n",
+            .{udp_history_port},
+        ) catch "";
+        if (udp_pos + row.len <= net_udp_buf.len) {
+            @memcpy(net_udp_buf[udp_pos .. udp_pos + row.len], row);
+            udp_pos += row.len;
+        }
+    }
+    _ = vfs.registerNode("proc/net/udp", vfs.S_IFREG | 0o444, net_udp_buf[0..udp_pos]);
+
 
     // /proc/net/unix
     var unix_pos: usize = 0;

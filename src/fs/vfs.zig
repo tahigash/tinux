@@ -256,6 +256,10 @@ pub fn init() void {
 
     // Register /dev/vda as VirtIO block device
     _ = registerNodeInternal("dev/vda", S_IFBLK | 0o660, "");
+
+    // Register /etc/resolv.conf and /etc/hosts for DNS and network resolution
+    _ = registerNodeInternal("etc/resolv.conf", S_IFREG | 0o644, "nameserver 10.0.2.3\n");
+    _ = registerNodeInternal("etc/hosts", S_IFREG | 0o644, "127.0.0.1\tlocalhost\n10.0.2.15\ttinux\n");
 }
 
 fn registerNodeInternal(norm_path: []const u8, mode: u32, data: []const u8) usize {
