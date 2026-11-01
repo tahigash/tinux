@@ -1,8 +1,8 @@
 # Tinux Implementation Specification: TASK-003
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
-> * **Architect (Structure & Harness):** Gemini 4 Argon
-> * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
-> * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
+> * **Architect (Structure & Harness):** AI System Architect
+> * **Auditor (Low-Level & ABI Contract):** AI Code Auditor
+> * **Target Builder:** Autonomous AI Builder Agent
 ---
 ## 0. Builder Agent Operating Rules
 You are the Implementation Builder. Implement the requirements adhering strictly to these rules:
@@ -35,7 +35,7 @@ You are the Implementation Builder. Implement the requirements adhering strictly
   * `src/mm/heap.zig` (Create: coalescing intrusive free-list allocator with `std.mem.Allocator` interface)
   * `src/main.zig` (Modify: run TASK-003 verification suite)
 ---
-## 3. Virtual Memory & Heap ABI Contract (Opus 5.5 Audited)
+## 3. Virtual Memory & Heap ABI Contract (AI Audited)
 ### 3.1 Virtual Address Space Layout
 While `boot.S` in TASK-001 initially set up 2 MiB large pages for the first 1 GiB, this task constructs fine-grained 4 KiB paging to support user space isolation and dynamic heap growth:
 | Virtual Address Range | Size | Purpose & Protection Flags |
@@ -269,6 +269,6 @@ If `zig build` or `./scripts/verify_qemu.sh TASK-003 5` fails three consecutive 
 ```diff
 [Code diff of src/mm/vmm.zig or src/mm/heap.zig]
 ```
-## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
+## 4. Suspected Root Cause (For AI Architect / Auditor Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]
 ```

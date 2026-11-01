@@ -1,8 +1,8 @@
 # Tinux Implementation Specification: TASK-004
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
-> * **Architect (Structure & Harness):** Gemini 4 Argon
-> * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
-> * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
+> * **Architect (Structure & Harness):** AI System Architect
+> * **Auditor (Low-Level & ABI Contract):** AI Code Auditor
+> * **Target Builder:** Autonomous AI Builder Agent
 ---
 ## 0. Builder Agent Operating Rules
 You are the Implementation Builder. Implement the requirements adhering strictly to these rules:
@@ -38,7 +38,7 @@ You are the Implementation Builder. Implement the requirements adhering strictly
   * `src/syscall/dispatch.zig` (Create: `syscallDispatch`, `sys_write`, `sys_exit`, `validateUserBuffer`)
   * `src/main.zig` (Modify: map user test page and enter Ring 3)
 ---
-## 3. Hardware & Syscall ABI Contract (Opus 5.5 Audited)
+## 3. Hardware & Syscall ABI Contract (AI Audited)
 ### 3.1 Model Specific Register (MSR) Configuration
 Using the GDT selectors defined in TASK-002 (`0x08` = Kernel Code, `0x10` = Kernel Data, `0x18` = User Data, `0x20` = User Code 64), configure x86_64 syscall MSRs:
 | MSR Name | MSR Index | Value | Register Field & Purpose Specification |
@@ -390,6 +390,6 @@ If `zig build` or `./scripts/verify_qemu.sh TASK-004 5` fails three consecutive 
 ```diff
 [Code diff or relevant source snippet of failed component]
 ```
-## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
+## 4. Suspected Root Cause (For AI Architect / Auditor Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]
 ```

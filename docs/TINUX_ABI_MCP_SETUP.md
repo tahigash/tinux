@@ -329,7 +329,7 @@ if __name__ == "__main__":
     main()
 ```
 ---
-## 3. Google Antigravity MCP Configuration
+## 3. Agent MCP Configuration
 Add the following configuration to .antigravity/mcp.json so agents can autonomously query Linux ABI definitions:
 ```json
 {

@@ -1,12 +1,12 @@
 # Tinux Implementation Specification: TASK-016
 
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
-> * **Architect (Structure & Harness):** Gemini 4 Argon
-> * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
-> * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
+> * **Architect (Structure & Harness):** AI System Architect
+> * **Auditor (Low-Level & ABI Contract):** AI Code Auditor
+> * **Target Builder:** Autonomous AI Builder Agent
 > * **Prerequisite:** `TASK-015` Passed (`./scripts/verify_qemu.sh TASK-015 10` == Exit Code 0)
 ---
-## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
+## 0. Builder Agent Operating Rules (For Autonomous AI Builder)
 You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
    Do not alter POSIX USTAR 512-byte header parsing offsets, `sys_mount` (165) / `sys_umount2` (166) argument handling, or `/dev/vda` sector writeback algorithms specified here.
@@ -40,7 +40,7 @@ Use modern Zig syntax (0.13 / 0.14 / 0.15+) exclusively to prevent compilation e
   * `src/main.zig` (Modify: register `/mnt` directory on boot and update test markers to `TASK-016`)
   * `scripts/verify_qemu.sh` (Modify: build real USTAR disk image on host, mount `/dev/vda` onto `/mnt`, verify persistence)
 ---
-## 3. Persistent Filesystem (`tarfs`) & Mount ABI Contract (Opus 5.5 Audited)
+## 3. Persistent Filesystem (`tarfs`) & Mount ABI Contract (AI Audited)
 ### 3.1 POSIX.1-1988 USTAR 512-Byte Sector Layout Contract
 To allow host inspection and modification without loopback root permissions, disk contents are formatted as standard POSIX USTAR archives:
 | Byte Offset | Length | Field Name | Format & Persistence Contract |
@@ -238,6 +238,6 @@ If `zig build` or `./scripts/verify_qemu.sh TASK-016 10` fails 3 consecutive tim
 ```diff
 [Relevant code diff for src/fs/tarfs.zig, src/fs/vfs.zig, src/syscall/dispatch.zig]
 ```
-## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
+## 4. Suspected Root Cause (For AI Architect / Auditor Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]
 ```

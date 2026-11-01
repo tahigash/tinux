@@ -72,13 +72,13 @@ QEMU_ARGS=(
     -S
 )
 # ------------------------------------------------------------------------------
-# 3. Mode A: Server-Only Mode (For VS Code / Google Antigravity F5 Attach)
+# 3. Mode A: Server-Only Mode (For VS Code / Compatible IDE F5 Attach)
 # ------------------------------------------------------------------------------
 if [[ "$SERVER_ONLY" -eq 1 ]]; then
     # Kill any stale QEMU listening on GDB_PORT
     pkill -f "qemu-system-x86_64.*tcp::${GDB_PORT}" 2>/dev/null || true
     echo -e "${GREEN}[DEBUG]${NC} Starting QEMU GDB server on ${CYAN}localhost:${GDB_PORT}${NC} (CPU paused with -S)..."
-    echo -e "${YELLOW}[DEBUG]${NC} Press F5 in VS Code / Google Antigravity to attach, or Ctrl+C to stop."
+    echo -e "${YELLOW}[DEBUG]${NC} Press F5 in VS Code / IDE to attach, or Ctrl+C to stop."
     exec qemu-system-x86_64 "${QEMU_ARGS[@]}"
 fi
 # ------------------------------------------------------------------------------

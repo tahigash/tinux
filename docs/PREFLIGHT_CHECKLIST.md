@@ -1,6 +1,6 @@
 # Tinux Pre-Flight Final Checklist & Zig Version Compatibility Guide
 > **Purpose:**
-> Eliminates environment-level build failures before launching the autonomous **Gemini 3.8 Flash High** Builder loop
+> Eliminates environment-level build failures before launching the autonomous builder agent loop
 ---
 ## 1. Automated Pre-Flight Check Script (`scripts/preflight_check.sh`)
 Before starting the autonomous loop, save `scripts/preflight_check.sh` and run `chmod +x scripts/preflight_check.sh && ./scripts/preflight_check.sh`. Confirm all checks pass before advancing:
@@ -160,6 +160,6 @@ chmod +x scripts/preflight_check.sh
 ./scripts/preflight_check.sh
 # Step 2: Verify clean baseline commit
 git status
-# Step 3: Select Gemini 3.8 Flash High in Google Antigravity,
+# Step 3: Configure the autonomous builder agent,
 #         and submit the Section 2 prompt from ANTIGRAVITY_MASTER_PROMPT.md
 ```

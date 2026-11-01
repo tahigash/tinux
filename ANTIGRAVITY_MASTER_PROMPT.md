@@ -1,8 +1,8 @@
 # Tinux Autonomous Kernel Engineering: Master Orchestrator Prompt
 
-> **Target Environment:** Google Antigravity IDE / CLI  
-> * **Primary Builder Model:** Gemini 3.8 Flash High (Fast Autonomous Execution Loop)  
-> * **Escalation Architect / Auditor Models:** Gemini 4 Argon / Claude Opus 5.5  
+> **Target Environment:** Autonomous AI Engineering Environment / CLI  
+> * **Primary Builder Agent:** Autonomous AI Builder (Fast Autonomous Execution Loop)  
+> * **Escalation Architect / Auditor Agents:** AI System Architect / AI Code Auditor  
 > * **Project Goal:** Build **Tinux**, a clean-room Linux ABI-compatible x86_64 kernel written in Zig, executing `TASK-001` through `TASK-020` sequentially.
 
 ---
@@ -42,9 +42,9 @@ tinux/
 
 ---
 
-## 2. Prompt for Primary Builder (Gemini 3.8 Flash High)
+## 2. Prompt for Primary Builder (Autonomous AI Builder)
 
-Select **Gemini 3.8 Flash High** in Google Antigravity and submit the following prompt to start the autonomous loop:
+Configure the autonomous builder agent and submit the following prompt to start the autonomous loop:
 
 ```text
 You are the Implementation Builder agent for the Tinux kernel project.
@@ -80,9 +80,9 @@ Follow the protocol in `ANTIGRAVITY_MASTER_PROMPT.md`. Implement and verify each
 
 ---
 
-## 3. Prompt for Escalation Architect (Gemini 4 Argon / Claude Opus 5.5)
+## 3. Prompt for Escalation Architect (AI System Architect / AI Code Auditor)
 
-If the Builder agent triggers the 3-strike escalation and halts with `ESCALATION_REPORT.md`, switch the active model to **Gemini 4 Argon** or **Claude Opus 5.5**, and submit the following prompt:
+If the Builder agent triggers the 3-strike escalation and halts with `ESCALATION_REPORT.md`, switch the active agent to the **AI System Architect** or **AI Code Auditor**, and submit the following prompt:
 
 ```text
 The Builder agent reached the 3-strike failure limit and generated an ESCALATION_REPORT.md.
@@ -92,5 +92,5 @@ The Builder agent reached the 3-strike failure limit and generated an ESCALATION
    - If the specification was ambiguous or missed edge cases, revise `docs/specs/SPEC_TASK_0XX.md` directly so the Builder can implement it cleanly.
    - If the issue is a specific low-level fault (such as register clobbering or page table calculation errors), apply the targeted fix and verify `./scripts/verify_qemu.sh TASK-0XX` passes.
 
-Once resolved, switch back to Gemini 3.8 Flash High and instruct it to resume autonomous execution from the next pending task in `PROGRESS.md`.
+Once resolved, return to the autonomous builder agent and instruct it to resume autonomous execution from the next pending task in `PROGRESS.md`.
 ```

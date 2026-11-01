@@ -24,7 +24,7 @@ if [[ ! -f "PROGRESS.md" ]]; then
     log_warn "PROGRESS.md not found; creating fresh 20-task PROGRESS.md..."
     cat << 'EOF' > PROGRESS.md
 # Tinux Autonomous Implementation Progress
-> **Instructions for Builder Agent (Gemini 3.8 Flash High):**
+> **Instructions for Builder Agent (Autonomous AI Builder):**
 > 1. Find the first task below marked `[ ]`.
 > 2. Read its corresponding specification in `docs/specs/SPEC_TASK_0XX.md`.
 > 3. Implement the code and run `./scripts/verify_qemu.sh TASK-0XX`.

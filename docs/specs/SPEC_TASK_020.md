@@ -1,11 +1,11 @@
 # Tinux Implementation Specification: TASK-020
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
-> * **Architect (Structure & Harness):** Gemini 4 Argon
-> * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
-> * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
+> * **Architect (Structure & Harness):** AI System Architect
+> * **Auditor (Low-Level & ABI Contract):** AI Code Auditor
+> * **Target Builder:** Autonomous AI Builder Agent
 > * **Prerequisite:** `TASK-019` Passed (`./scripts/verify_qemu.sh TASK-019 10` == Exit Code 0)
 ---
-## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
+## 0. Builder Agent Operating Rules (For Autonomous AI Builder)
 You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
    Implement the Local APIC (`0xFEE0_0000`) and IOAPIC (`0xFEC0_0000`) MMIO drivers, the 16-bit real mode AP trampoline at `0x0000_8000`, and the INIT-SIPI-SIPI wake protocol exactly as specified.
@@ -48,7 +48,7 @@ You are the **Implementation Builder**. Implement the requirements adhering stri
   * `src/arch/x86_64/gdt.zig`
   * `src/drivers/timer.zig`
 ---
-## 3. Hardware, Protocol & Linux ABI Contract (Opus 5.5 Audited)
+## 3. Hardware, Protocol & Linux ABI Contract (AI Audited)
 ### 3.1 Local APIC (`0xFEE0_0000`) & IOAPIC (`0xFEC0_0000`) MMIO Contract
 | Register / Port / Field | Address / Offset | Width | Access | Exact Hardware / Protocol Behavior |
 | :--- | :--- | :--- | :--- | :--- |
@@ -407,6 +407,6 @@ If compilation or `./scripts/verify_qemu.sh TASK-020 10` fails 3 consecutive tim
 ```diff
 [Relevant code diff for src/arch/x86_64/ap_trampoline.S, src/arch/x86_64/apic.zig, src/mm/vmm.zig]
 ```
-## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
+## 4. Suspected Root Cause (For AI Architect / Auditor Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]
 ```

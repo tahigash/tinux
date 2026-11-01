@@ -1,13 +1,13 @@
 # Tinux Kernel Interactive Debugging Guide (`scripts/debug_gdb.sh` & `.vscode/launch.json`)
 > **Purpose:**
-> Provides single-command CLI debugging (`./scripts/debug_gdb.sh`) and one-click `F5` IDE debugging in Google Antigravity and VS Code.
+> Provides single-command CLI debugging (`./scripts/debug_gdb.sh`) and one-click `F5` IDE debugging in VS Code and compatible IDEs.
 ---
 ## 1. Technical Architecture
 1. **Seamless 32-bit PVH to 64-bit Long Mode Transition:**
    * QEMU starts the CPU in 32-bit mode at the Xen PVH entry point (`boot.S`) before switching to 64-bit Long Mode.
 2. **Dual-Mode Operation (`CLI` and `--server-only` for IDE):**
    * `./scripts/debug_gdb.sh`: Builds the kernel, boots QEMU in `-s -S` mode in the background, and automatically attaches GDB.
-   * `./scripts/debug_gdb.sh --server-only`: Starts QEMU waiting on `localhost:1234` so you can attach from Google Antigravity or VS Code via `launch.json`.
+   * `./scripts/debug_gdb.sh --server-only`: Starts QEMU waiting on `localhost:1234` so you can attach from VS Code or compatible IDEs via `launch.json`.
 3. **Custom Tinux GDB Macros:**
    * Includes `tinux-tasks` (dumps the process table), `tinux-mmap` (shows QEMU virtual memory mappings via `monitor info mem`), and `tinux-break-kmain`.
 ---
@@ -88,13 +88,13 @@ QEMU_ARGS=(
     -S
 )
 # ------------------------------------------------------------------------------
-# 3. Mode A: Server-Only Mode (For VS Code / Google Antigravity F5 Attach)
+# 3. Mode A: Server-Only Mode (For VS Code / Compatible IDE F5 Attach)
 # ------------------------------------------------------------------------------
 if [[ "$SERVER_ONLY" -eq 1 ]]; then
     # Kill any stale QEMU listening on GDB_PORT
     pkill -f "qemu-system-x86_64.*tcp::${GDB_PORT}" 2>/dev/null || true
     echo -e "${GREEN}[DEBUG]${NC} Starting QEMU GDB server on ${CYAN}localhost:${GDB_PORT}${NC} (CPU paused with -S)
-    echo -e "${YELLOW}[DEBUG]${NC} Press F5 in VS Code / Google Antigravity to attach, or Ctrl+C to stop."
+    echo -e "${YELLOW}[DEBUG]${NC} Press F5 in VS Code / IDE to attach, or Ctrl+C to stop."
     exec qemu-system-x86_64 "${QEMU_ARGS[@]}"
 fi
 # ------------------------------------------------------------------------------
@@ -182,7 +182,7 @@ echo -e "${GREEN}[DEBUG]${NC} Attaching ${CYAN}${GDB_BIN}${NC} (serial output lo
 "$GDB_BIN" -q -x "$GDBINIT_FILE"
 ```
 ---
-## 3. VS Code / Google Antigravity Tasks (`.vscode/tasks.json`)
+## 3. IDE Tasks Configuration (`.vscode/tasks.json`)
 This task builds the kernel with `zig build` and boots QEMU with GDB stub enabled in the background on `F5`. Save it as `.vscode/tasks.json`:
 ```json
 {
@@ -236,7 +236,7 @@ This task builds the kernel with `zig build` and boots QEMU with GDB stub enable
 }
 ```
 ---
-## 4. VS Code / Google Antigravity Launch Config (`.vscode/launch.json`)
+## 4. IDE Launch Configuration (`.vscode/launch.json`)
 Save the following configuration as `.vscode/launch.json`:
 ```json
 {

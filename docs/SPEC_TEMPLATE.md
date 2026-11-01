@@ -1,13 +1,13 @@
 # Tinux Implementation Specification Template (Architect-Builder Pattern)
 
 > **Usage Workflow:**
-> 1. **[Architect Step 1 - Gemini 4 Argon]:** Fill out the blueprint draft based on kernel architecture and subsystem boundaries.
-> 2. **[Architect Step 2 - Claude Opus 5.5]:** Audit Linux ABI compatibility, memory layouts, lock ordering, and register contracts.
-> 3. **[Builder Step 3 - Gemini 3.8 Flash High]:** Ingest the audited specification, implement the code, and run the automated QEMU verification loop.
+> 1. **[Architect Step 1 - AI System Architect]:** Fill out the blueprint draft based on kernel architecture and subsystem boundaries.
+> 2. **[Architect Step 2 - AI Code Auditor]:** Audit Linux ABI compatibility, memory layouts, lock ordering, and register contracts.
+> 3. **[Builder Step 3 - Autonomous AI Builder]:** Ingest the audited specification, implement the code, and run the automated QEMU verification loop.
 
 ---
 
-## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
+## 0. Builder Agent Operating Rules (For Autonomous AI Builder)
 
 You are the **Implementation Builder**. Adhere strictly to the following rules:
 

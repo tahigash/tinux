@@ -1,6 +1,6 @@
 # Tinux Developer Cheat Sheet & Project Reference
 
-> **Quick Reference:** Essential directory structure, operational commands, and workflow guide for the Tinux kernel project on Google Antigravity.
+> **Quick Reference:** Essential directory structure, operational commands, and workflow guide for the Tinux kernel project.
 
 ---
 
@@ -153,7 +153,7 @@ Configure `.antigravity/mcp.json` to allow autonomous agents to query struct lay
 
 ### Phase 3: Autonomous Builder Loop
 
-1. Select **`Gemini 3.8 Flash High`** in the model picker.
+1. Configure the primary autonomous builder agent.
 2. Submit the kickoff prompt from `ANTIGRAVITY_MASTER_PROMPT.md` (Section 2).
 3. The agent autonomously cycles through:
    * Finding the first incomplete task in `PROGRESS.md`.
@@ -165,9 +165,9 @@ Configure `.antigravity/mcp.json` to allow autonomous agents to query struct lay
 
 If the Builder fails three consecutive attempts on a milestone:
 1. Run `./scripts/triage_crash.py --out ESCALATION_REPORT.md` to diagnose the failure.
-2. Switch models to **`Gemini 4 Argon`** (architecture / paging issues) or **`Claude Opus 5.5`** (ABI / assembly / lock bugs).
+2. Switch to the **AI System Architect** (architecture / paging issues) or **AI Code Auditor** (ABI / assembly / lock bugs).
 3. Submit the Section 3 prompt from `ANTIGRAVITY_MASTER_PROMPT.md` to review the failure and apply targeted corrections.
-4. Return to **`Gemini 3.8 Flash High`** to resume autonomous implementation.
+4. Return to the autonomous builder agent to resume autonomous implementation.
 
 ### Phase 5: Full Regression Testing & Interactive Shell
 
