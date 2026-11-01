@@ -679,6 +679,7 @@ export fn bbMain(initial_rsp: [*]const u64) callconv(.C) noreturn {
 
         if (in_fd == 0) {
             puts("Tinux Shell v0.1\n");
+            puts("/ # ");
         }
 
         var lbuf: [512]u8 = undefined;
@@ -693,6 +694,9 @@ export fn bbMain(initial_rsp: [*]const u64) callconv(.C) noreturn {
             if (ch[0] == '\n') {
                 runShellLine(lbuf[0..lpos]);
                 lpos = 0;
+                if (in_fd == 0) {
+                    puts("/ # ");
+                }
             } else if (lpos < lbuf.len - 1) {
                 lbuf[lpos] = ch[0];
                 lpos += 1;
