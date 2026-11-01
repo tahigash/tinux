@@ -25,12 +25,15 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path(".cache/initramfs.zig"),
     });
 
+    kernel.addAssemblyFile(b.path("src/arch/x86_64/boot.S"));
     kernel.addAssemblyFile(b.path("src/arch/x86_64/syscall_entry.S"));
     kernel.addAssemblyFile(b.path("src/arch/x86_64/isr.S"));
 
+    kernel.setLinkerScript(b.path("linker.ld"));
+
     // Code model and entry point
     kernel.root_module.code_model = .kernel;
-    kernel.entry = .{ .symbol_name = "_start" };
+    kernel.entry = .{ .symbol_name = "_start32" };
 
     b.installArtifact(kernel);
 }

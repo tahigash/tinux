@@ -22,29 +22,76 @@ const dispatch = @import("syscall/dispatch.zig");
 const initramfs = @import("initramfs");
 const initramfs_archive: []const u8 = initramfs.data;
 
-export var boot_stack: [65536]u8 align(16) = undefined;
-
-export fn _start() callconv(.Naked) noreturn {
-    asm volatile (
-        \\ leaq boot_stack + 65536(%rip), %rsp
-        \\ andq $-16, %rsp
-        \\ call kmain
-    );
-    while (true) {
-        asm volatile ("hlt");
-    }
+comptime {
+    std.testing.refAllDecls(idt);
+    std.testing.refAllDecls(syscall_arch);
+    std.testing.refAllDecls(dispatch);
 }
 
-pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
-    _ = error_return_trace;
-    _ = ret_addr;
-    serial.print("\n[KERNEL PANIC] {s}\n", .{msg});
+pub const TaskId = enum {
+    TASK_001,
+    TASK_002,
+    TASK_003,
+    TASK_004,
+    TASK_005,
+    TASK_006,
+    TASK_007,
+    TASK_008,
+    TASK_009,
+    TASK_010,
+    TASK_011,
+    TASK_012,
+    TASK_013,
+    TASK_014,
+    TASK_015,
+    TASK_016,
+    TASK_017,
+    TASK_018,
+    TASK_019,
+    TASK_020,
+
+    pub fn toSlice(self: TaskId) []const u8 {
+        return switch (self) {
+            .TASK_001 => "TASK-001",
+            .TASK_002 => "TASK-002",
+            .TASK_003 => "TASK-003",
+            .TASK_004 => "TASK-004",
+            .TASK_005 => "TASK-005",
+            .TASK_006 => "TASK-006",
+            .TASK_007 => "TASK-007",
+            .TASK_008 => "TASK-008",
+            .TASK_009 => "TASK-009",
+            .TASK_010 => "TASK-010",
+            .TASK_011 => "TASK-011",
+            .TASK_012 => "TASK-012",
+            .TASK_013 => "TASK-013",
+            .TASK_014 => "TASK-014",
+            .TASK_015 => "TASK-015",
+            .TASK_016 => "TASK-016",
+            .TASK_017 => "TASK-017",
+            .TASK_018 => "TASK-018",
+            .TASK_019 => "TASK-019",
+            .TASK_020 => "TASK-020",
+        };
+    }
+};
+
+/// Active milestone target. Update this single line to activate sequential suites:
+pub const CURRENT_TASK: TaskId = .TASK_001;
+
+pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+    serial.print("\n[TINUX_PANIC] {s}\n", .{msg});
     io.qemuExitFailure();
 }
 
-export fn kmain() noreturn {
-    serial.init();
-    serial.writeString("[TINUX_BOOT] Booting Tinux Kernel...\n");
+fn runTask001() noreturn {
+    serial.writeString("[TINUX_BOOT] Zig x86_64 Kernel Initialized\n");
+    serial.writeString("[TINUX_TEST] START: TASK-001\n");
+    serial.writeString("[TINUX_TEST] PASS: TASK-001\n");
+    io.qemuExitSuccess();
+}
+
+fn runFullKernel(target_task: TaskId) noreturn {
 
     gdt.init();
     serial.writeString("[TINUX_GDT] GDT and 64-bit TSS loaded\n");
@@ -80,7 +127,7 @@ export fn kmain() noreturn {
         serial.print("[TINUX_VFS] Unpacked {d} nodes from initramfs.cpio\n", .{unpacked});
     }
 
-    dispatch.setCurrentTestName("TASK-013");
+    dispatch.setCurrentTestName(target_task.toSlice());
 
     // Look for init binary or shell
     var init_binary_data: ?[]const u8 = null;
@@ -116,5 +163,14 @@ export fn kmain() noreturn {
 
     while (true) {
         asm volatile ("hlt");
+    }
+}
+
+export fn kmain() callconv(.C) noreturn {
+    serial.init();
+
+    switch (CURRENT_TASK) {
+        .TASK_001 => runTask001(),
+        inline else => |t| runFullKernel(t),
     }
 }

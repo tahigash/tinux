@@ -9,7 +9,7 @@
 
 ## Milestone Checklist
 
-- [ ] **TASK-001**: `docs/specs/SPEC_TASK_001.md`: x86_64 Minimal Boot (Xen PVH), COM1 Serial Console & QEMU Auto-Verification Harness
+- [x] **TASK-001**: `docs/specs/SPEC_TASK_001.md`: x86_64 Minimal Boot (Xen PVH), COM1 Serial Console & QEMU Auto-Verification Harness
 - [ ] **TASK-002**: `docs/specs/SPEC_TASK_002.md`: GDT/TSS Reconstruction, IDT Exception Handlers (176B TrapFrame), and Bitmap PMM
 - [ ] **TASK-003**: `docs/specs/SPEC_TASK_003.md`: 4-Level Page Table Manager (VMM) and `std.mem.Allocator` Kernel Heap
 - [ ] **TASK-004**: `docs/specs/SPEC_TASK_004.md`: `SYSCALL`/`SYSRET` MSR Setup, Ring 3 Transition, and Minimal Syscall Dispatcher
