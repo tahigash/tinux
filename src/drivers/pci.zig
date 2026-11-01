@@ -29,6 +29,32 @@ pub fn writeConfig32(bus: u8, slot: u8, func: u8, offset: u8, val: u32) void {
     io.outl(CONFIG_DATA, val);
 }
 pub fn findDeviceAndEnableDma(target_vendor: u16, target_device: u16) ?PciDeviceInfo {
-    // Builder scans bus 0, slot 0..32, func 0. On match, enables Bit 0 (I/O) & Bit 2 (Bus Master)
-    // in Command register (offset 0x04), reads BAR0 (offset 0x10), and returns PciDeviceInfo.
+    for (0..32) |slot| {
+        const id_reg = readConfig32(0, @intCast(slot), 0, 0x00);
+        const vendor: u16 = @truncate(id_reg);
+        if (vendor == 0xFFFF) continue;
+        const device: u16 = @truncate(id_reg >> 16);
+
+        if (vendor == target_vendor and device == target_device) {
+            const cmd_reg = readConfig32(0, @intCast(slot), 0, 0x04);
+            writeConfig32(0, @intCast(slot), 0, 0x04, cmd_reg | 0x0000_0005);
+
+            const bar0 = readConfig32(0, @intCast(slot), 0, 0x10);
+            const io_base: u16 = @truncate(bar0 & ~@as(u32, 0x3));
+
+            const intr = readConfig32(0, @intCast(slot), 0, 0x3C);
+            const irq_line: u8 = @truncate(intr);
+
+            return PciDeviceInfo{
+                .bus = 0,
+                .slot = @intCast(slot),
+                .func = 0,
+                .vendor_id = vendor,
+                .device_id = device,
+                .io_base = io_base,
+                .irq_line = irq_line,
+            };
+        }
+    }
+    return null;
 }

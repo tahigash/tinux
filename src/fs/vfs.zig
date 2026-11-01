@@ -138,6 +138,10 @@ pub const VfsNode = struct {
     pub fn isCharDev(self: *const VfsNode) bool {
         return (self.mode & S_IFMT) == S_IFCHR;
     }
+
+    pub fn isBlockDev(self: *const VfsNode) bool {
+        return (self.mode & S_IFMT) == S_IFBLK;
+    }
 };
 
 pub var nodes: [MAX_VFS_NODES]VfsNode = [_]VfsNode{.{}} ** MAX_VFS_NODES;
@@ -249,6 +253,9 @@ pub fn init() void {
     _ = registerNodeInternal("dev/tty", S_IFCHR | 0o666, "");
     _ = registerNodeInternal("dev/console", S_IFCHR | 0o666, "");
     _ = registerNodeInternal("dev/null", S_IFCHR | 0o666, "");
+
+    // Register /dev/vda as VirtIO block device
+    _ = registerNodeInternal("dev/vda", S_IFBLK | 0o660, "");
 }
 
 fn registerNodeInternal(norm_path: []const u8, mode: u32, data: []const u8) usize {
@@ -470,6 +477,7 @@ pub fn fillStat(node_idx: usize, stat_out: *LinuxStat) void {
         return;
     }
     const node = &nodes[node_idx];
+    const rdev: u64 = if ((node.mode & S_IFMT) == S_IFBLK) (254 << 8) | 0 else 0;
     stat_out.* = .{
         .st_dev = 1,
         .st_ino = @as(u64, node_idx + 1),
@@ -478,7 +486,7 @@ pub fn fillStat(node_idx: usize, stat_out: *LinuxStat) void {
         .st_uid = 0,
         .st_gid = 0,
         .__pad0 = 0,
-        .st_rdev = 0,
+        .st_rdev = rdev,
         .st_size = @as(i64, @intCast(node.size)),
         .st_blksize = 4096,
         .st_blocks = @as(i64, @intCast((node.size + 511) / 512)),

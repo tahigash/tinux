@@ -18,6 +18,7 @@ const epoll = @import("fs/epoll.zig");
 const elf = @import("proc/elf.zig");
 const task = @import("proc/task.zig");
 const dispatch = @import("syscall/dispatch.zig");
+const virtio_blk = @import("drivers/virtio_blk.zig");
 
 // Embedded initramfs archive provided via build system (.cache/initramfs.cpio)
 const initramfs = @import("initramfs");
@@ -364,6 +365,7 @@ fn runFullKernel(target_task: TaskId) noreturn {
 
     vfs.init();
     pipe_mod.init();
+    _ = virtio_blk.init();
     procfs.initAndRegister();
 
     tty.init();

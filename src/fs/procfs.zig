@@ -5,6 +5,7 @@ const task = @import("../proc/task.zig");
 const timer = @import("../drivers/timer.zig");
 const profiler = @import("../syscall/profiler.zig");
 const socket = @import("../net/socket.zig");
+const virtio_blk = @import("../drivers/virtio_blk.zig");
 
 var meminfo_buf: [256]u8 = undefined;
 var uptime_buf: [64]u8 = undefined;
@@ -15,6 +16,7 @@ var net_tcp_buf: [2048]u8 = undefined;
 var net_unix_buf: [2048]u8 = undefined;
 var syscalls_buf: [4096]u8 = undefined;
 var strace_buf: [256]u8 = undefined;
+var partitions_buf: [128]u8 = undefined;
 
 pub fn initAndRegister() void {
     _ = vfs.registerNode("proc", vfs.S_IFDIR | 0o555, "");
@@ -86,6 +88,15 @@ pub fn refreshDynamicNodes() void {
     // /proc/strace status
     const strace_slice = std.fmt.bufPrint(&strace_buf, "enabled: 1\n", .{}) catch "enabled: 1\n";
     _ = vfs.registerNode("proc/strace", vfs.S_IFREG | 0o444, strace_slice);
+
+    // /proc/partitions
+    const num_blocks = virtio_blk.getCapacityBytes() / 1024;
+    const part_slice = std.fmt.bufPrint(
+        &partitions_buf,
+        "major minor  #blocks  name\n 254        0       {d} vda\n",
+        .{num_blocks},
+    ) catch "major minor  #blocks  name\n 254        0       1024 vda\n";
+    _ = vfs.registerNode("proc/partitions", vfs.S_IFREG | 0o444, part_slice);
 
     // /proc/net/tcp
     var tcp_pos: usize = 0;

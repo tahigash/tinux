@@ -20,6 +20,7 @@ const epoll = @import("../fs/epoll.zig");
 const elf = @import("../proc/elf.zig");
 const strace = @import("strace.zig");
 const profiler = @import("profiler.zig");
+const virtio_blk = @import("../drivers/virtio_blk.zig");
 
 pub const SYS_READ: u64 = 0;
 pub const SYS_WRITE: u64 = 1;
@@ -88,6 +89,7 @@ pub const SYS_GETPGRP: u64 = 111;
 pub const SYS_SETSID: u64 = 112;
 pub const SYS_GETPGID: u64 = 121;
 pub const SYS_ARCH_PRCTL: u64 = 158;
+pub const SYS_SYNC: u64 = 162;
 pub const SYS_GETTID: u64 = 186;
 pub const SYS_FUTEX: u64 = 202;
 pub const SYS_EPOLL_CREATE: u64 = 213;
@@ -366,19 +368,30 @@ pub fn sysArchPrctl(code: usize, addr: usize) isize {
 pub fn sysPread64(fd: usize, buf_ptr: usize, count: usize, pos: usize) isize {
     if (count == 0) return 0;
     const cur_task = task.currentTask();
-    if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind != .VFS_FILE) {
+    if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind == .UNUSED) {
         return errno_mod.toReturn(.EBADF);
     }
     if (!validateUserBuffer(buf_ptr, count)) {
         return errno_mod.toReturn(.EFAULT);
     }
-    const node = vfs.getNode(cur_task.fd_table[fd].node_idx);
-    const file_data = node.slice();
-    if (pos >= file_data.len) return 0;
-    const avail = file_data.len - pos;
-    const to_read = @min(count, avail);
-    @memcpy(@as([*]u8, @ptrFromInt(buf_ptr))[0..to_read], file_data[pos .. pos + to_read]);
-    return @intCast(to_read);
+    const entry = &cur_task.fd_table[fd];
+    switch (entry.kind) {
+        .BLKDEV => {
+            const dst = @as([*]u8, @ptrFromInt(buf_ptr))[0..count];
+            const n = virtio_blk.readBytes(pos, dst);
+            return @intCast(n);
+        },
+        .VFS_FILE => {
+            const node = vfs.getNode(entry.node_idx);
+            const file_data = node.slice();
+            if (pos >= file_data.len) return 0;
+            const avail = file_data.len - pos;
+            const to_read = @min(count, avail);
+            @memcpy(@as([*]u8, @ptrFromInt(buf_ptr))[0..to_read], file_data[pos .. pos + to_read]);
+            return @intCast(to_read);
+        },
+        else => return errno_mod.toReturn(.EBADF),
+    }
 }
 
 pub fn sysReadlinkat(dirfd: isize, path_ptr: usize, buf_ptr: usize, bufsiz: usize) isize {
@@ -539,6 +552,11 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                             },
                         }
                     },
+                    .BLKDEV => {
+                        const n = virtio_blk.readBytes(entry.offset, dst);
+                        entry.offset += n;
+                        res = @intCast(n);
+                    },
                     else => res = errno_mod.toReturn(.EBADF),
                 }
             }
@@ -597,6 +615,11 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                             task.wakeSocketReadWaiters(p_idx);
                         }
                         res = @intCast(w);
+                    },
+                    .BLKDEV => {
+                        const n = virtio_blk.writeBytes(entry.offset, src);
+                        entry.offset += n;
+                        res = @intCast(n);
                     },
                     else => res = errno_mod.toReturn(.EBADF),
                 }
@@ -690,6 +713,26 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                             },
                         }
                         if (new_off < 0) {
+                            res = errno_mod.toReturn(.EINVAL);
+                        } else {
+                            entry.offset = @intCast(new_off);
+                            res = @intCast(new_off);
+                        }
+                    },
+                    .BLKDEV => {
+                        const dev_size: i64 = @intCast(virtio_blk.getCapacityBytes());
+                        const curr_off: i64 = @intCast(entry.offset);
+                        var new_off: i64 = 0;
+                        switch (whence) {
+                            SEEK_SET => new_off = offset,
+                            SEEK_CUR => new_off = curr_off + offset,
+                            SEEK_END => new_off = dev_size + offset,
+                            else => {
+                                res = errno_mod.toReturn(.EINVAL);
+                                break :blk;
+                            },
+                        }
+                        if (new_off < 0 or new_off > dev_size) {
                             res = errno_mod.toReturn(.EINVAL);
                         } else {
                             entry.offset = @intCast(new_off);
@@ -1819,6 +1862,10 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             res = sysArchPrctl(a1, a2);
         },
 
+        SYS_SYNC => {
+            res = 0;
+        },
+
         SYS_CLOCK_GETTIME => {
             const clk_id = a1;
             _ = clk_id;
@@ -2244,6 +2291,8 @@ fn handleOpenat(dirfd: isize, path_str: []const u8, flags: u32, mode: u32) isize
                 const acc_mode = flags & 0x03;
                 kind = if (acc_mode == vfs.O_WRONLY) .CONSOLE_OUT else .CONSOLE_IN;
             }
+        } else if ((target_node.mode & vfs.S_IFMT) == vfs.S_IFBLK) {
+            kind = .BLKDEV;
         }
         cur_task.fd_table[fd] = .{
             .kind = kind,
@@ -2292,6 +2341,24 @@ fn handleFstat(fd: usize, stat_ptr: usize) isize {
         .SOCKET => {
             st.* = .{
                 .st_mode = vfs.S_IFSOCK | 0o666,
+            };
+            return 0;
+        },
+        .BLKDEV => {
+            st.* = .{
+                .st_dev = 1,
+                .st_ino = entry.node_idx + 1,
+                .st_nlink = 1,
+                .st_mode = vfs.S_IFBLK | 0o660,
+                .st_uid = 0,
+                .st_gid = 0,
+                .st_rdev = (254 << 8) | 0,
+                .st_size = @as(i64, @intCast(virtio_blk.getCapacityBytes())),
+                .st_blksize = 512,
+                .st_blocks = @as(i64, @intCast(virtio_blk.getCapacityBytes() / 512)),
+                .st_atime = 0,
+                .st_mtime = 0,
+                .st_ctime = 0,
             };
             return 0;
         },
@@ -2451,6 +2518,11 @@ fn handleReadDirect(fd: usize, buf_ptr: usize, count: usize) isize {
                 .would_block => -11,
             };
         },
+        .BLKDEV => {
+            const n = virtio_blk.readBytes(entry.offset, dst);
+            entry.offset += n;
+            return @intCast(n);
+        },
         else => return errno_mod.toReturn(.EBADF),
     }
 }
@@ -2481,6 +2553,11 @@ fn handleWriteDirect(fd: usize, buf_ptr: usize, count: usize) isize {
                 task.wakeSocketReadWaiters(p_idx);
             }
             return @intCast(w);
+        },
+        .BLKDEV => {
+            const n = virtio_blk.writeBytes(entry.offset, src);
+            entry.offset += n;
+            return @intCast(n);
         },
         else => return errno_mod.toReturn(.EBADF),
     }

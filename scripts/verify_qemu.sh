@@ -362,14 +362,23 @@ for cmd in commands:
 '
             ;;
         15)
-            cat << 'EOF'
-echo "[TINUX_SH] Inspecting /proc/partitions:"
-/bin/cat /proc/partitions
-echo "[TINUX_SH] Reading initial sector from /dev/vda and writing persistence marker:"
-/bin/busybox blk_rw
-echo "[TINUX_BLK] Guest-to-Host VirtIO-Block DMA read & write verified!"
-exit 0
-EOF
+            "$PYTHON_BIN" -c '
+import sys, time
+commands = [
+    "echo \"[TINUX_SH] Inspecting /proc/partitions:\"\n",
+    "/bin/cat /proc/partitions\n",
+    "echo \"[TINUX_SH] Reading initial sector from /dev/vda and writing persistence marker:\"\n",
+    "/bin/busybox blk_rw\n",
+    "echo \"[TINUX_BLK] Guest-to-Host VirtIO-Block DMA read & write verified!\"\n",
+    "exit 0\n"
+]
+for cmd in commands:
+    for ch in cmd:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(0.001)
+    time.sleep(0.05)
+'
             ;;
         16)
             cat << 'EOF'
