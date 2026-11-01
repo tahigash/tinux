@@ -4,6 +4,7 @@ const vmm = @import("../mm/vmm.zig");
 const vfs = @import("../fs/vfs.zig");
 const syscall_arch = @import("../arch/x86_64/syscall.zig");
 const SyscallFrame = syscall_arch.SyscallFrame;
+const signal = @import("signal.zig");
 
 pub const MAX_TASKS: usize = 16;
 pub const KERNEL_STACK_SIZE: usize = 32768;
@@ -76,6 +77,12 @@ pub const Task = struct {
     wake_tick: u64 = 0,
     sleep_wake_tick: u64 = 0,
     alarm_wake_tick: u64 = 0,
+    itimer_interval_ticks: u64 = 0,
+    sigactions: [65]signal.KernelSigAction = [_]signal.KernelSigAction{.{}} ** 65,
+    pending_signals: u64 = 0,
+    sig_mask: u64 = 0,
+    in_signal_handler: bool = false,
+    last_sigframe_vaddr: usize = 0,
     clear_child_tid: usize = 0,
     cwd_buf: [vfs.MAX_PATH_LEN]u8 = [_]u8{'/'} ++ [_]u8{0} ** (vfs.MAX_PATH_LEN - 1),
     cwd_len: usize = 1,
@@ -285,6 +292,13 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
         .cmdline_buf = parent.cmdline_buf,
         .cmdline_len = parent.cmdline_len,
         .fd_table = parent.fd_table,
+        .sigactions = parent.sigactions,
+        .sig_mask = parent.sig_mask,
+        .pending_signals = 0,
+        .in_signal_handler = false,
+        .last_sigframe_vaddr = 0,
+        .alarm_wake_tick = 0,
+        .itimer_interval_ticks = 0,
     };
 
     // Duplicate FDs and increase ref counts (pipe/socket/epoll)
@@ -371,6 +385,13 @@ pub fn cloneCurrentTask(
         .cmdline_buf = parent.cmdline_buf,
         .cmdline_len = parent.cmdline_len,
         .fd_table = parent.fd_table,
+        .sigactions = parent.sigactions,
+        .sig_mask = parent.sig_mask,
+        .pending_signals = 0,
+        .in_signal_handler = false,
+        .last_sigframe_vaddr = 0,
+        .alarm_wake_tick = 0,
+        .itimer_interval_ticks = 0,
     };
 
     // If CLONE_PARENT_SETTID, write child PID to ptid_ptr
@@ -426,9 +447,12 @@ pub fn exitCurrentTask(exit_status: i32) *SyscallFrame {
     cur.exit_status = exit_status;
     cur.closeAllFds();
     wakeParentIfWaiting(cur.parent_pid);
+    if (getTaskByPid(cur.parent_pid)) |parent| {
+        signal.sendSignalToTask(parent, signal.SIGCHLD);
+    }
     const next_idx = scheduleNextOrWait();
     activateTask(next_idx);
-    return tasks[next_idx].saved_frame;
+    return signal.deliverPendingSignals(tasks[next_idx].saved_frame);
 }
 
 pub fn wakeParentIfWaiting(parent_pid: usize) void {
@@ -493,6 +517,19 @@ pub fn wakeEpollWaiters() void {
     }
 }
 
+pub fn checkAlarmTimers(now_ticks: u64) void {
+    for (&tasks) |*t| {
+        if (t.state != .UNUSED and t.alarm_wake_tick > 0 and now_ticks >= t.alarm_wake_tick) {
+            if (t.itimer_interval_ticks > 0) {
+                t.alarm_wake_tick = now_ticks + t.itimer_interval_ticks;
+            } else {
+                t.alarm_wake_tick = 0;
+            }
+            signal.sendSignalToTask(t, signal.SIGALRM);
+        }
+    }
+}
+
 pub fn scheduleNextReady() ?usize {
     const start = (current_task_idx + 1) % MAX_TASKS;
     for (0..MAX_TASKS) |i| {
@@ -508,7 +545,9 @@ pub fn scheduleNextOrWait() usize {
     const timer = @import("../drivers/timer.zig");
     const tty = @import("../drivers/tty.zig");
     while (true) {
-        wakeSleepingTasks(timer.getTicks());
+        const now = timer.getTicks();
+        checkAlarmTimers(now);
+        wakeSleepingTasks(now);
         if (tty.hasReadableData()) {
             wakeTtyWaiters();
         }

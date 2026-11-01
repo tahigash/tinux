@@ -21,6 +21,7 @@ const dispatch = @import("syscall/dispatch.zig");
 const virtio_blk = @import("drivers/virtio_blk.zig");
 const virtio_net = @import("drivers/virtio_net.zig");
 const netstack = @import("net/netstack.zig");
+const signal = @import("proc/signal.zig");
 
 // Embedded initramfs archive provided via build system (.cache/initramfs.cpio)
 const initramfs = @import("initramfs");
@@ -39,6 +40,7 @@ comptime {
     std.testing.refAllDecls(heap);
     std.testing.refAllDecls(syscall_arch);
     std.testing.refAllDecls(dispatch);
+    std.testing.refAllDecls(signal);
 }
 
 pub const TaskId = enum {

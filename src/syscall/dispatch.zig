@@ -24,6 +24,7 @@ const virtio_blk = @import("../drivers/virtio_blk.zig");
 const tarfs = @import("../fs/tarfs.zig");
 const virtio_net = @import("../drivers/virtio_net.zig");
 const netstack = @import("../net/netstack.zig");
+const signal = @import("../proc/signal.zig");
 
 pub const SYS_READ: u64 = 0;
 pub const SYS_WRITE: u64 = 1;
@@ -51,6 +52,8 @@ pub const SYS_DUP: u64 = 32;
 pub const SYS_DUP2: u64 = 33;
 pub const SYS_PAUSE: u64 = 34;
 pub const SYS_NANOSLEEP: u64 = 35;
+pub const SYS_ALARM: u64 = 37;
+pub const SYS_SETITIMER: u64 = 38;
 pub const SYS_GETPID: u64 = 39;
 pub const SYS_SOCKET: u64 = 41;
 pub const SYS_CONNECT: u64 = 42;
@@ -248,7 +251,7 @@ fn sysExit(status: usize) *SyscallFrame {
         cur.pid = 0;
         const next_idx = task.scheduleNextOrWait();
         task.activateTask(next_idx);
-        return task.tasks[next_idx].saved_frame;
+        return signal.deliverPendingSignals(task.tasks[next_idx].saved_frame);
     } else {
         if (cur.clear_child_tid != 0) {
             if (vmm.translate(cur.pml4_phys, cur.clear_child_tid)) |pa| {
@@ -889,6 +892,79 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         SYS_MPROTECT => res = 0,
         SYS_MUNMAP => res = 0,
 
+        SYS_RT_SIGACTION => {
+            const sig = a1;
+            const act_ptr = a2;
+            const oact_ptr = a3;
+            const sigsetsize = a4;
+
+            if (sig == 0 or sig > 64 or sig == signal.SIGKILL or sig == signal.SIGSTOP) {
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
+            }
+            if (sigsetsize != 8) {
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
+            }
+            if (oact_ptr != 0) {
+                if (!validateUserBuffer(oact_ptr, @sizeOf(signal.KernelSigAction))) {
+                    res = errno_mod.toReturn(.EFAULT);
+                    break :blk;
+                }
+                const oact = @as(*signal.KernelSigAction, @ptrFromInt(oact_ptr));
+                oact.* = cur_task.sigactions[sig];
+            }
+            if (act_ptr != 0) {
+                if (!validateUserBuffer(act_ptr, @sizeOf(signal.KernelSigAction))) {
+                    res = errno_mod.toReturn(.EFAULT);
+                    break :blk;
+                }
+                const act = @as(*const signal.KernelSigAction, @ptrFromInt(act_ptr));
+                cur_task.sigactions[sig] = act.*;
+                cur_task.sigactions[sig].sa_mask &= ~signal.UNMASKABLE_SIGNALS;
+            }
+            res = 0;
+        },
+
+        SYS_RT_SIGPROCMASK => {
+            const how = a1;
+            const set_ptr = a2;
+            const oset_ptr = a3;
+            const sigsetsize = a4;
+
+            if (sigsetsize != 8) {
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
+            }
+            if (oset_ptr != 0) {
+                if (!validateUserBuffer(oset_ptr, 8)) {
+                    res = errno_mod.toReturn(.EFAULT);
+                    break :blk;
+                }
+                std.mem.writeInt(u64, @as(*[8]u8, @ptrFromInt(oset_ptr)), cur_task.sig_mask, .little);
+            }
+            if (set_ptr != 0) {
+                if (!validateUserBuffer(set_ptr, 8)) {
+                    res = errno_mod.toReturn(.EFAULT);
+                    break :blk;
+                }
+                const set_val = std.mem.readInt(u64, @as(*const [8]u8, @ptrFromInt(set_ptr)), .little);
+                switch (how) {
+                    signal.SIG_BLOCK => cur_task.sig_mask |= set_val,
+                    signal.SIG_UNBLOCK => cur_task.sig_mask &= ~set_val,
+                    signal.SIG_SETMASK => cur_task.sig_mask = set_val,
+                    else => {
+                        res = errno_mod.toReturn(.EINVAL);
+                        break :blk;
+                    },
+                }
+                cur_task.sig_mask &= ~signal.UNMASKABLE_SIGNALS;
+            }
+            res = 0;
+        },
+
+        SYS_RT_SIGRETURN => return signal.restoreSignalFrame(frame),
+
         SYS_IOCTL => {
             const fd = a1;
             const req = a2;
@@ -1100,7 +1176,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
 
                     const next_idx = task.scheduleNextOrWait();
                     task.activateTask(next_idx);
-                    return task.tasks[next_idx].saved_frame;
+                    return signal.deliverPendingSignals(task.tasks[next_idx].saved_frame);
                 }
             }
         },
@@ -1770,7 +1846,20 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             frame.user_rip = loaded.entry_rip;
             frame.user_rsp = loaded.user_rsp;
 
-            return frame;
+            for (&cur_task.sigactions) |*act| {
+                if (act.sa_handler > 1) {
+                    act.sa_handler = signal.SIG_DFL;
+                    act.sa_restorer = 0;
+                    act.sa_flags = 0;
+                    act.sa_mask = 0;
+                }
+            }
+            cur_task.in_signal_handler = false;
+            cur_task.last_sigframe_vaddr = 0;
+            cur_task.alarm_wake_tick = 0;
+            cur_task.itimer_interval_ticks = 0;
+
+            return signal.deliverPendingSignals(frame);
         },
 
         SYS_EXIT => return sysExit(a1),
@@ -1822,23 +1911,50 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         SYS_KILL => {
             const target_pid: isize = @bitCast(a1);
             const sig = a2;
-            var found = false;
-            for (&task.tasks) |*t| {
-                if (t.state != .UNUSED and target_pid == @as(isize, @intCast(t.pid))) {
-                    found = true;
-                    if (sig == 9 or sig == 15) {
-                        t.state = .ZOMBIE;
-                        t.exit_status = 128 + @as(i32, @intCast(sig));
-                        t.closeAllFds();
-                        task.wakeParentIfWaiting(t.parent_pid);
-                    }
-                    break;
-                }
+
+            if (sig > 64) {
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
             }
-            if (found) {
+
+            if (target_pid > 0) {
+                const utarget: usize = @intCast(target_pid);
+                if (task.getTaskByPid(utarget)) |t| {
+                    if (sig == 0) {
+                        res = 0;
+                    } else {
+                        signal.sendSignalToTask(t, sig);
+                        res = 0;
+                    }
+                } else {
+                    res = errno_mod.toReturn(.ESRCH);
+                }
+            } else if (target_pid == 0) {
+                var found = false;
+                for (&task.tasks) |*t| {
+                    if (t.state != .UNUSED and t.pgid == cur_task.pgid) {
+                        found = true;
+                        if (sig != 0) signal.sendSignalToTask(t, sig);
+                    }
+                }
+                res = if (found) 0 else errno_mod.toReturn(.ESRCH);
+            } else if (target_pid == -1) {
+                for (&task.tasks) |*t| {
+                    if (t.state != .UNUSED and t.pid > 1) {
+                        if (sig != 0) signal.sendSignalToTask(t, sig);
+                    }
+                }
                 res = 0;
             } else {
-                res = errno_mod.toReturn(.ESRCH);
+                const target_pgid: usize = @intCast(-target_pid);
+                var found = false;
+                for (&task.tasks) |*t| {
+                    if (t.state != .UNUSED and t.pgid == target_pgid) {
+                        found = true;
+                        if (sig != 0) signal.sendSignalToTask(t, sig);
+                    }
+                }
+                res = if (found) 0 else errno_mod.toReturn(.ESRCH);
             }
         },
 
@@ -2070,7 +2186,90 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             }
         },
 
-        SYS_PAUSE => res = 0,
+        SYS_PAUSE => {
+            cur_task.state = .WAITING_SIGNAL;
+            frame.rax = @bitCast(@as(isize, -4)); // -EINTR
+            cur_task.saved_frame = frame;
+            const next_idx = task.scheduleNextOrWait();
+            task.activateTask(next_idx);
+            return signal.deliverPendingSignals(task.tasks[next_idx].saved_frame);
+        },
+
+        SYS_ALARM => {
+            const seconds = a1;
+            const now = timer.getTicks();
+            var remaining: usize = 0;
+            if (cur_task.alarm_wake_tick > now) {
+                remaining = @intCast((cur_task.alarm_wake_tick - now) / timer.HZ);
+                if (remaining == 0 and cur_task.alarm_wake_tick > now) {
+                    remaining = 1;
+                }
+            }
+            if (seconds == 0) {
+                cur_task.alarm_wake_tick = 0;
+                cur_task.itimer_interval_ticks = 0;
+            } else {
+                cur_task.alarm_wake_tick = now + seconds * timer.HZ;
+                cur_task.itimer_interval_ticks = 0;
+            }
+            res = @intCast(remaining);
+        },
+
+        SYS_SETITIMER => {
+            const which = a1;
+            const new_val_ptr = a2;
+            const old_val_ptr = a3;
+
+            if (which != 0) { // ITIMER_REAL only
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
+            }
+            if (new_val_ptr == 0 or !validateUserBuffer(new_val_ptr, @sizeOf(signal.LinuxItimerval))) {
+                res = errno_mod.toReturn(.EFAULT);
+                break :blk;
+            }
+            if (old_val_ptr != 0 and !validateUserBuffer(old_val_ptr, @sizeOf(signal.LinuxItimerval))) {
+                res = errno_mod.toReturn(.EFAULT);
+                break :blk;
+            }
+
+            const now = timer.getTicks();
+            if (old_val_ptr != 0) {
+                var old_it = @as(*signal.LinuxItimerval, @ptrFromInt(old_val_ptr));
+                old_it.* = .{};
+                if (cur_task.alarm_wake_tick > now) {
+                    const rem_ticks = cur_task.alarm_wake_tick - now;
+                    old_it.it_value_sec = @intCast(rem_ticks / timer.HZ);
+                    old_it.it_value_usec = @intCast((rem_ticks % timer.HZ) * 10_000);
+                }
+                if (cur_task.itimer_interval_ticks > 0) {
+                    old_it.it_interval_sec = @intCast(cur_task.itimer_interval_ticks / timer.HZ);
+                    old_it.it_interval_usec = @intCast((cur_task.itimer_interval_ticks % timer.HZ) * 10_000);
+                }
+            }
+
+            const new_it = @as(*const signal.LinuxItimerval, @ptrFromInt(new_val_ptr));
+            if (new_it.it_value_sec < 0 or new_it.it_value_usec < 0 or new_it.it_value_usec >= 1_000_000 or
+                new_it.it_interval_sec < 0 or new_it.it_interval_usec < 0 or new_it.it_interval_usec >= 1_000_000)
+            {
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
+            }
+
+            if (new_it.it_value_sec == 0 and new_it.it_value_usec == 0) {
+                cur_task.alarm_wake_tick = 0;
+                cur_task.itimer_interval_ticks = 0;
+            } else {
+                const val_ticks: u64 = @as(u64, @intCast(new_it.it_value_sec * timer.HZ)) +
+                    @as(u64, @intCast(@divTrunc(new_it.it_value_usec + 9999, 10000)));
+                cur_task.alarm_wake_tick = now + @max(val_ticks, 1);
+
+                const int_ticks: u64 = @as(u64, @intCast(new_it.it_interval_sec * timer.HZ)) +
+                    @as(u64, @intCast(@divTrunc(new_it.it_interval_usec + 9999, 10000)));
+                cur_task.itimer_interval_ticks = int_ticks;
+            }
+            res = 0;
+        },
 
         SYS_CHDIR => {
             var raw_path: [vfs.MAX_PATH_LEN]u8 = undefined;
@@ -2241,7 +2440,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                         cur_task.saved_frame = frame;
                         const next_idx = task.scheduleNextOrWait();
                         task.activateTask(next_idx);
-                        return task.tasks[next_idx].saved_frame;
+                        return signal.deliverPendingSignals(task.tasks[next_idx].saved_frame);
                     }
                 },
                 futex.FUTEX_WAKE, futex.FUTEX_WAKE_BITSET => {
@@ -2360,7 +2559,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         cur_task.saved_frame = frame;
         const next_idx = task.scheduleNextOrWait();
         task.activateTask(next_idx);
-        return task.tasks[next_idx].saved_frame;
+        return signal.deliverPendingSignals(task.tasks[next_idx].saved_frame);
     }
 
     frame.rax = @bitCast(res);
@@ -2372,7 +2571,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         strace.traceSyscall(num, a1, a2, a3, a4, orig_rip, res);
     }
 
-    return frame;
+    return signal.deliverPendingSignals(frame);
 }
 
 fn handleOpenat(dirfd: isize, path_str: []const u8, flags: u32, mode: u32) isize {

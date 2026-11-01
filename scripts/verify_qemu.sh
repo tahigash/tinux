@@ -67,6 +67,15 @@ build_user_elf() {
         chmod +x "$out_bin"
         return 0
     fi
+    if zig build-exe "$src_file" \
+        -target x86_64-freestanding \
+        -O ReleaseSmall \
+        "$pie_flag" \
+        "-femit-bin=${out_bin}" >/dev/null 2>&1; then
+        rm -f "${out_bin}.o" "${out_bin}.elf.o"
+        chmod +x "$out_bin"
+        return 0
+    fi
     # Fallback for Zig 0.14.1 / 0.15+ where callconv(.C)/.Naked became lowercase .c/.naked
     local patched_src=".cache/$(basename "$src_file")"
     sed -e 's/callconv(\.C)/callconv(.c)/g' \
@@ -426,12 +435,21 @@ for cmd in commands:
 '
             ;;
         18)
-            cat << 'EOF'
-echo "[TINUX_SH] Running user-space signal delivery & rt_sigreturn test suite..."
-/bin/sig_test
-echo "[TINUX_SIGNAL] POSIX signal delivery (rt_sigaction/sigprocmask/setitimer/SIGCHLD/rt_sigreturn) verified!"
-exit 0
-EOF
+            "$PYTHON_BIN" -c '
+import sys, time
+commands = [
+    "echo \"[TINUX_SH] Running user-space signal delivery & rt_sigreturn test suite...\"\n",
+    "/bin/sig_test\n",
+    "echo \"[TINUX_SIGNAL] POSIX signal delivery (rt_sigaction/sigprocmask/setitimer/SIGCHLD/rt_sigreturn) verified!\"\n",
+    "exit 0\n"
+]
+for cmd in commands:
+    for ch in cmd:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(0.001)
+    time.sleep(0.05)
+'
             ;;
         19)
             cat << 'EOF'

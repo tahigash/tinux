@@ -108,12 +108,11 @@ pub fn onCharReceived(raw_ch: u8) void {
             serial.writeString("^C\r\n");
         }
         // Deliver SIGINT to fg_pgid
+        const signal = @import("../proc/signal.zig");
+        const target_pgid: usize = @intCast(@max(fg_pgid, 1));
         for (&task.tasks) |*t| {
-            if (t.state != .UNUSED and t.pgid == @as(usize, @intCast(@max(fg_pgid, 1)))) {
-                t.term_sig = 2; // SIGINT
-                if (t.pid != 1) {
-                    _ = task.exitCurrentTask(130);
-                }
+            if (t.state != .UNUSED and t.pgid == target_pgid) {
+                signal.sendSignalToTask(t, signal.SIGINT);
             }
         }
         return;
