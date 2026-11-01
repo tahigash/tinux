@@ -11,7 +11,7 @@ pub fn init() void {
     io.outb(COM1_PORT + 3, 0x03); // 5. Clear DLAB, set 8 data bits, 1 stop bit, no parity (8N1)
     io.outb(COM1_PORT + 2, 0xC7); // 6. Enable FIFO, clear TX/RX FIFOs, 14-byte threshold
     io.outb(COM1_PORT + 4, 0x0B); // 7. Enable IRQ gating, assert RTS and DTR
-    io.outb(COM1_PORT + 1, 0x00); // Polled mode: ensure interrupts remain disabled
+    io.outb(COM1_PORT + 1, 0x01); // 8. Enable Received Data Available interrupt (IER = 0x01)
 }
 
 pub fn enableRxInterrupt() void {
@@ -54,16 +54,19 @@ pub fn hasRxByte() bool {
     return (io.inb(COM1_PORT + 5) & 0x01) != 0;
 }
 
-pub fn readRxByte() ?u8 {
-    if (!hasRxByte()) return null;
+pub fn readByteNonBlocking() ?u8 {
+    if ((io.inb(COM1_PORT + 5) & 0x01) == 0) return null;
     return io.inb(COM1_PORT);
+}
+
+pub fn readRxByte() ?u8 {
+    return readByteNonBlocking();
 }
 
 pub fn pollRx() void {
     // When TTY is initialized, delegate to tty.onRxByte
     const tty = @import("tty.zig");
-    while (hasRxByte()) {
-        const b = io.inb(COM1_PORT);
+    while (readByteNonBlocking()) |b| {
         tty.onRxByte(b);
     }
 }

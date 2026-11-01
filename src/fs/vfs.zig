@@ -133,6 +133,10 @@ pub const VfsNode = struct {
     pub fn isDir(self: *const VfsNode) bool {
         return (self.mode & S_IFMT) == S_IFDIR;
     }
+
+    pub fn isCharDev(self: *const VfsNode) bool {
+        return (self.mode & S_IFMT) == S_IFCHR;
+    }
 };
 
 pub var nodes: [MAX_VFS_NODES]VfsNode = [_]VfsNode{.{}} ** MAX_VFS_NODES;

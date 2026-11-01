@@ -3,6 +3,7 @@ const gdt = @import("gdt.zig");
 const io = @import("io.zig");
 const serial = @import("../../drivers/serial.zig");
 const timer = @import("../../drivers/timer.zig");
+const tty = @import("../../drivers/tty.zig");
 
 pub const TrapFrame = extern struct {
     r15: u64,
@@ -52,9 +53,7 @@ pub const IdtEntry = extern struct {
 pub const IdtGate = IdtEntry;
 
 var idt_entries: [256]IdtEntry align(16) = [_]IdtEntry{.{}} ** 256;
-extern const isr_stub_table: [32]usize;
-extern fn irq0() void;
-extern fn irq4() void;
+extern const isr_stub_table: [37]usize;
 
 pub var breakpoint_hit_count: usize = 0;
 
@@ -71,7 +70,7 @@ pub fn setGate(vec: u8, handler_addr: usize, ist: u8, type_attr: u8) void {
 }
 
 pub fn init() void {
-    for (0..32) |vec| {
+    for (0..37) |vec| {
         const handler_addr = isr_stub_table[vec];
         if (vec == 3) {
             setGate(@truncate(vec), handler_addr, 0, 0xEE); // Trap Gate, DPL=3
@@ -81,10 +80,6 @@ pub fn init() void {
             setGate(@truncate(vec), handler_addr, 0, 0x8E); // Interrupt Gate, DPL=0
         }
     }
-
-    // Hardware IRQs
-    setGate(32, @intFromPtr(&irq0), 0, 0x8E);
-    setGate(36, @intFromPtr(&irq4), 0, 0x8E);
 
     var idtr: [10]u8 align(16) = undefined;
     const idt_limit: u16 = @intCast(@sizeOf(@TypeOf(idt_entries)) - 1);
@@ -111,8 +106,11 @@ export fn isrDispatch(frame: *TrapFrame) callconv(.C) void {
         return;
     }
     if (frame.vector == 36) {
-        serial.pollRx();
-        timer.sendEoi(4);
+        tty.onIrq4();
+        return;
+    }
+    if (frame.vector >= 32 and frame.vector < 48) {
+        io.outb(0x20, 0x20);
         return;
     }
 

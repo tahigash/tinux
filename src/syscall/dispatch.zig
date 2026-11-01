@@ -26,6 +26,7 @@ pub const SYS_CLOSE: u64 = 3;
 pub const SYS_STAT: u64 = 4;
 pub const SYS_FSTAT: u64 = 5;
 pub const SYS_LSTAT: u64 = 6;
+pub const SYS_POLL: u64 = 7;
 pub const SYS_LSEEK: u64 = 8;
 pub const SYS_MMAP: u64 = 9;
 pub const SYS_MPROTECT: u64 = 10;
@@ -102,6 +103,7 @@ pub const SYS_UTIMENSAT: u64 = 280;
 pub const SYS_ACCEPT4: u64 = 288;
 pub const SYS_DUP3: u64 = 292;
 pub const SYS_PIPE2: u64 = 293;
+pub const SYS_PPOLL: u64 = 271;
 pub const SYS_SET_ROBUST_LIST: u64 = 273;
 pub const SYS_PRLIMIT64: u64 = 302;
 pub const SYS_GETRANDOM: u64 = 318;
@@ -413,12 +415,16 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 switch (entry.kind) {
                     .CONSOLE_IN => {
                         const r = tty.read(dst);
-                        switch (r.status) {
-                            .bytes => res = @intCast(r.n),
+                        switch (r) {
+                            .bytes => |n| res = @intCast(n),
                             .eof => res = 0,
                             .would_block => {
-                                cur_task.state = .WAITING_TTY;
-                                do_block = true;
+                                if ((entry.flags & vfs.O_NONBLOCK) != 0) {
+                                    res = errno_mod.toReturn(.EAGAIN);
+                                } else {
+                                    cur_task.state = .WAITING_TTY;
+                                    do_block = true;
+                                }
                             },
                         }
                     },
@@ -482,7 +488,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 const entry = &cur_task.fd_table[fd];
                 const src = @as([*]const u8, @ptrFromInt(buf_ptr))[0..count];
                 switch (entry.kind) {
-                    .CONSOLE_OUT, .CONSOLE_ERR => {
+                    .CONSOLE_IN, .CONSOLE_OUT, .CONSOLE_ERR => {
                         serial.writeString(src);
                         res = @intCast(count);
                     },
@@ -574,6 +580,10 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
 
         SYS_FSTAT => {
             res = handleFstat(a1, a2);
+        },
+
+        SYS_POLL, SYS_PPOLL => {
+            res = handlePoll(a1, a2);
         },
 
         SYS_LSEEK => {
@@ -701,57 +711,9 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                 if (entry.kind != .CONSOLE_IN and entry.kind != .CONSOLE_OUT and entry.kind != .CONSOLE_ERR) {
                     res = errno_mod.toReturn(.ENOTTY);
                 } else {
-                    switch (req) {
-                    tty.TCGETS => {
-                        if (!validateUserBuffer(arg, @sizeOf(tty.LinuxTermios))) {
-                            res = errno_mod.toReturn(.EFAULT);
-                        } else {
-                            const p = @as(*tty.LinuxTermios, @ptrFromInt(arg));
-                            p.* = tty.getTermios();
-                            res = 0;
-                        }
-                    },
-                    tty.TCSETS, tty.TCSETSW, tty.TCSETSF => {
-                        if (!validateUserBuffer(arg, @sizeOf(tty.LinuxTermios))) {
-                            res = errno_mod.toReturn(.EFAULT);
-                        } else {
-                            const p = @as(*const tty.LinuxTermios, @ptrFromInt(arg));
-                            tty.setTermios(p.*);
-                            res = 0;
-                        }
-                    },
-                    tty.TIOCGPGRP => {
-                        if (!validateUserBuffer(arg, @sizeOf(i32))) {
-                            res = errno_mod.toReturn(.EFAULT);
-                        } else {
-                            const p = @as(*i32, @ptrFromInt(arg));
-                            p.* = tty.getForegroundPgrp();
-                            res = 0;
-                        }
-                    },
-                    tty.TIOCSPGRP => {
-                        if (!validateUserBuffer(arg, @sizeOf(i32))) {
-                            res = errno_mod.toReturn(.EFAULT);
-                        } else {
-                            const p = @as(*const i32, @ptrFromInt(arg));
-                            tty.setForegroundPgrp(p.*);
-                            res = 0;
-                        }
-                    },
-                    tty.TIOCGWINSZ => {
-                        if (!validateUserBuffer(arg, @sizeOf(tty.LinuxWinsize))) {
-                            res = errno_mod.toReturn(.EFAULT);
-                        } else {
-                            const p = @as(*tty.LinuxWinsize, @ptrFromInt(arg));
-                            p.* = .{ .ws_row = 25, .ws_col = 80 };
-                            res = 0;
-                        }
-                    },
-                    tty.TIOCSWINSZ => res = 0,
-                    else => res = errno_mod.toReturn(.ENOTTY),
+                    res = tty.handleIoctl(req, arg, &validateUserBuffer) catch |err| errno_mod.toReturn(err);
                 }
             }
-        }
         },
 
         SYS_PREAD64 => {
@@ -956,7 +918,6 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
 
         SYS_GETPID => res = @intCast(if (cur_task.pid != 0) cur_task.pid else 1),
         SYS_GETPPID => res = @intCast(cur_task.parent_pid),
-        SYS_GETPGID, SYS_GETPGRP => res = @intCast(cur_task.pgid),
         SYS_GETUID, SYS_GETGID, SYS_GETEUID, SYS_GETEGID => res = 0,
         SYS_GETTID => res = @intCast(if (cur_task.pid != 0) cur_task.pid else 1),
         SYS_SET_ROBUST_LIST, SYS_PRLIMIT64 => res = 0,
@@ -1626,13 +1587,46 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         SYS_SETPGID => {
-            cur_task.pgid = if (a2 != 0) a2 else cur_task.pid;
-            res = 0;
+            const target_pid = if (a1 == 0) cur_task.pid else a1;
+            const new_pgid = if (a2 == 0) target_pid else a2;
+            var found = false;
+            for (&task.tasks) |*t| {
+                if (t.state != .UNUSED and t.pid == target_pid) {
+                    t.pgid = new_pgid;
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                res = 0;
+            } else {
+                res = errno_mod.toReturn(.ESRCH);
+            }
+        },
+
+        SYS_GETPGRP => {
+            res = @intCast(cur_task.pgid);
         },
 
         SYS_SETSID => {
             cur_task.pgid = cur_task.pid;
             res = @intCast(cur_task.pid);
+        },
+
+        SYS_GETPGID => {
+            const target_pid = if (a1 == 0) cur_task.pid else a1;
+            var found_pgid: ?usize = null;
+            for (&task.tasks) |*t| {
+                if (t.state != .UNUSED and t.pid == target_pid) {
+                    found_pgid = t.pgid;
+                    break;
+                }
+            }
+            if (found_pgid) |pg| {
+                res = @intCast(pg);
+            } else {
+                res = errno_mod.toReturn(.ESRCH);
+            }
         },
 
         SYS_CLOCK_GETRES => {
@@ -1738,8 +1732,17 @@ fn handleOpenat(dirfd: isize, path_str: []const u8, flags: u32, mode: u32) isize
 
     if (fd_slot) |fd| {
         const cloexec = (flags & vfs.O_CLOEXEC) != 0;
+        const target_node = vfs.getNode(node_idx.?);
+        var kind: vfs.FdKind = .VFS_FILE;
+        if (target_node.isCharDev()) {
+            const n_path = target_node.name();
+            if (std.mem.endsWith(u8, n_path, "tty") or std.mem.endsWith(u8, n_path, "console")) {
+                const acc_mode = flags & 0x03;
+                kind = if (acc_mode == vfs.O_WRONLY) .CONSOLE_OUT else .CONSOLE_IN;
+            }
+        }
         cur_task.fd_table[fd] = .{
-            .kind = .VFS_FILE,
+            .kind = kind,
             .node_idx = node_idx.?,
             .offset = 0,
             .flags = flags,
@@ -1790,6 +1793,68 @@ fn handleFstat(fd: usize, stat_ptr: usize) isize {
         },
         else => return errno_mod.toReturn(.EBADF),
     }
+}
+
+pub const LinuxPollFd = extern struct {
+    fd: i32,
+    events: i16,
+    revents: i16 = 0,
+    comptime {
+        std.debug.assert(@sizeOf(LinuxPollFd) == 8);
+    }
+};
+
+fn handlePoll(fds_ptr: usize, nfds: usize) isize {
+    if (nfds == 0) return 0;
+    if (!validateUserBuffer(fds_ptr, nfds * @sizeOf(LinuxPollFd))) {
+        return errno_mod.toReturn(.EFAULT);
+    }
+    const cur_task = task.currentTask();
+    const fds = @as([*]LinuxPollFd, @ptrFromInt(fds_ptr))[0..nfds];
+    var ready_count: isize = 0;
+
+    for (fds) |*pfd| {
+        pfd.revents = 0;
+        if (pfd.fd < 0) continue;
+        const ufd: usize = @intCast(pfd.fd);
+        if (ufd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[ufd].kind == .UNUSED) {
+            pfd.revents = 0x0020; // POLLNVAL
+            ready_count += 1;
+            continue;
+        }
+
+        const entry = &cur_task.fd_table[ufd];
+        var rev: i16 = 0;
+        switch (entry.kind) {
+            .CONSOLE_IN => {
+                if ((pfd.events & 0x0001) != 0 and tty.hasReadableData()) {
+                    rev |= 0x0001; // POLLIN
+                }
+                if ((pfd.events & 0x0004) != 0) {
+                    rev |= 0x0004; // POLLOUT
+                }
+            },
+            .CONSOLE_OUT, .CONSOLE_ERR => {
+                if ((pfd.events & 0x0004) != 0) {
+                    rev |= 0x0004; // POLLOUT
+                }
+            },
+            .VFS_FILE => {
+                if ((pfd.events & 0x0001) != 0) rev |= 0x0001;
+                if ((pfd.events & 0x0004) != 0) rev |= 0x0004;
+            },
+            else => {
+                if ((pfd.events & 0x0001) != 0) rev |= 0x0001;
+                if ((pfd.events & 0x0004) != 0) rev |= 0x0004;
+            },
+        }
+        pfd.revents = rev;
+        if (rev != 0) {
+            ready_count += 1;
+        }
+    }
+
+    return ready_count;
 }
 
 fn handleStatPath(dirfd: isize, path_str: []const u8, stat_ptr: usize, flags: u32) isize {
@@ -1853,7 +1918,11 @@ fn handleReadDirect(fd: usize, buf_ptr: usize, count: usize) isize {
     switch (entry.kind) {
         .CONSOLE_IN => {
             const r = tty.read(dst);
-            return @intCast(r.n);
+            return switch (r) {
+                .bytes => |n| @intCast(n),
+                .eof => 0,
+                .would_block => -11,
+            };
         },
         .VFS_FILE => {
             const node = vfs.getNode(entry.node_idx);

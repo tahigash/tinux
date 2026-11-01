@@ -392,19 +392,30 @@ fn runFullKernel(target_task: TaskId) noreturn {
 
     if (init_binary_data) |raw_elf| {
         const pid1_pml4 = vmm.createFreshUserPml4() orelse @panic("Failed to allocate PID 1 PML4");
-        const argv = [_][]const u8{ init_binary_name, "/etc/rc.sh" };
-        const envp = [_][]const u8{ "PATH=/bin", "HOME=/", "TERM=vt100" };
-
-        const loaded = elf.loadStaticElfWithArgs(pid1_pml4, raw_elf, &argv, &envp) catch |err| {
-            serial.print("ELF load error: {}\n", .{err});
-            @panic("Failed to load init ELF binary");
-        };
-
-        const pid1_task = task.initPid1(pid1_pml4, loaded.initial_brk, init_binary_name);
-        pid1_task.setCmdline(&argv);
-
-        serial.print("[TINUX_INIT] Spawning PID 1 ({s} /etc/rc.sh)...\n", .{init_binary_name});
-        syscall_arch.enterUserMode(loaded.entry_rip, loaded.user_rsp);
+        const is_interactive = @intFromEnum(target_task) >= @intFromEnum(TaskId.TASK_012);
+        if (is_interactive) {
+            const argv = [_][]const u8{ "/bin/sh" };
+            const envp = [_][]const u8{ "PATH=/bin", "HOME=/", "TERM=vt100" };
+            const loaded = elf.loadStaticElfWithArgs(pid1_pml4, raw_elf, &argv, &envp) catch |err| {
+                serial.print("ELF load error: {}\n", .{err});
+                @panic("Failed to load init ELF binary");
+            };
+            const pid1_task = task.initPid1(pid1_pml4, loaded.initial_brk, "/bin/sh");
+            pid1_task.setCmdline(&argv);
+            serial.writeString("[TINUX_INIT] Spawning interactive shell PID 1 (/bin/sh)...\n");
+            syscall_arch.enterUserMode(loaded.entry_rip, loaded.user_rsp);
+        } else {
+            const argv = [_][]const u8{ init_binary_name, "/etc/rc.sh" };
+            const envp = [_][]const u8{ "PATH=/bin", "HOME=/", "TERM=vt100" };
+            const loaded = elf.loadStaticElfWithArgs(pid1_pml4, raw_elf, &argv, &envp) catch |err| {
+                serial.print("ELF load error: {}\n", .{err});
+                @panic("Failed to load init ELF binary");
+            };
+            const pid1_task = task.initPid1(pid1_pml4, loaded.initial_brk, init_binary_name);
+            pid1_task.setCmdline(&argv);
+            serial.print("[TINUX_INIT] Spawning PID 1 ({s} /etc/rc.sh)...\n", .{init_binary_name});
+            syscall_arch.enterUserMode(loaded.entry_rip, loaded.user_rsp);
+        }
     } else {
         serial.writeString("[TINUX_INIT] No userland binary found in initramfs.cpio\n");
         io.qemuExitSuccess();

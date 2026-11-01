@@ -372,8 +372,12 @@ pub fn scheduleNextReady() ?usize {
 
 pub fn scheduleNextOrWait() usize {
     const timer = @import("../drivers/timer.zig");
+    const tty = @import("../drivers/tty.zig");
     while (true) {
         wakeSleepingTasks(timer.getTicks());
+        if (tty.hasReadableData()) {
+            wakeTtyWaiters();
+        }
 
         if (scheduleNextReady()) |next_idx| {
             return next_idx;

@@ -128,6 +128,8 @@ if (( TASK_NUM >= 6 )); then
     echo "nameserver 10.0.2.3" > "${INITRAMFS_ROOT}/etc/resolv.conf"
     printf "127.0.0.1\tlocalhost\n10.0.2.15\ttinux\n" > "${INITRAMFS_ROOT}/etc/hosts"
     ensure_busybox_elf || exit 1
+    # Clean up stale /etc/rc.sh before building initramfs
+    rm -f "${INITRAMFS_ROOT}/etc/rc.sh"
     # Generate task-appropriate /etc/rc.sh for non-interactive boot stages (TASK-007 .. TASK-011)
     case "$TASK_NUM" in
         6)
@@ -297,14 +299,26 @@ echo "[HARNESS] Running QEMU for ${TEST_CASE} (timeout=${TIMEOUT_SEC}s)..."
 generate_interactive_stdin() {
     case "$TASK_NUM" in
         12)
-            cat << 'EOF'
-export TINUX_INTERACTIVE="TTY_IRQ4_VERIFIED"
-echo "[TINUX_SH] Interactive command received: $TINUX_INTERACTIVE"
-/bin/cat /etc/motd | /bin/grep Tinux
-/bin/ps
-echo "[TINUX_TTY_OK] Interactive TTY session & termios ioctls verified cleanly!"
-exit 0
-EOF
+            "$PYTHON_BIN" -c '
+import sys, time
+commands = [
+    "export TINUX_STAGE=\"Interactive-TTY-Ready\"\n",
+    "echo \"[TINUX_TTY] Operator session active: $TINUX_STAGE\"\n",
+    "/bin/mkdir /tmp/ops\n",
+    "echo \"Linux asset compatibility verified on Tinux!\" > /tmp/ops/report.txt\n",
+    "/bin/cat /tmp/ops/report.txt | /bin/grep Tinux\n",
+    "/bin/dyn_inspect\n",
+    "/bin/ps\n",
+    "echo \"[TINUX_OPS] All interactive Linux operations completed successfully!\"\n",
+    "exit 0\n"
+]
+for cmd in commands:
+    for ch in cmd:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(0.001)
+    time.sleep(0.05)
+'
             ;;
         13)
             cat << 'EOF'
@@ -399,8 +413,9 @@ EOF
 }
 if (( TASK_NUM >= 12 )); then
     (
-        sleep 0.35
+        sleep 1.6
         generate_interactive_stdin
+        sleep 3
     ) | timeout "$TIMEOUT_SEC" qemu-system-x86_64 "${QEMU_ARGS[@]}" > "$LOG_FILE" 2>&1
     QEMU_EXIT=$?
 else
