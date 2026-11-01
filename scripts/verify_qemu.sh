@@ -345,12 +345,21 @@ for cmd in commands:
 '
             ;;
         14)
-            cat << 'EOF'
-echo "[TINUX_SH] Running multi-threaded futex & epoll verification suite..."
-/bin/thread_epoll_test
-echo "[TINUX_RUNTIME] CLONE_VM threads, futex synchronization, and epoll multiplexing verified!"
-exit 0
-EOF
+            "$PYTHON_BIN" -c '
+import sys, time
+commands = [
+    "echo \"[TINUX_SH] Running multi-threaded futex & epoll verification suite...\"\n",
+    "/bin/thread_epoll_test\n",
+    "echo \"[TINUX_RUNTIME] CLONE_VM threads, futex synchronization, and epoll multiplexing verified!\"\n",
+    "exit 0\n"
+]
+for cmd in commands:
+    for ch in cmd:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(0.001)
+    time.sleep(0.05)
+'
             ;;
         15)
             cat << 'EOF'

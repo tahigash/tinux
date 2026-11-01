@@ -14,6 +14,7 @@ const pipe_mod = @import("fs/pipe.zig");
 const procfs = @import("fs/procfs.zig");
 const tty = @import("drivers/tty.zig");
 const socket = @import("net/socket.zig");
+const epoll = @import("fs/epoll.zig");
 const elf = @import("proc/elf.zig");
 const task = @import("proc/task.zig");
 const dispatch = @import("syscall/dispatch.zig");
@@ -369,6 +370,7 @@ fn runFullKernel(target_task: TaskId) noreturn {
     serial.writeString("[TINUX_TTY] 16550A UART IRQ4 & POSIX line discipline initialized\n");
 
     socket.init();
+    epoll.init();
 
     // Unpack CPIO archive
     if (initramfs_archive.len > 0) {

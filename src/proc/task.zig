@@ -144,6 +144,7 @@ pub const Task = struct {
     pub fn closeAllFds(self: *Task) void {
         const pipe_mod = @import("../fs/pipe.zig");
         const sock_mod = @import("../net/socket.zig");
+        const epoll_mod = @import("../fs/epoll.zig");
         for (&self.fd_table) |*e| {
             switch (e.kind) {
                 .PIPE_READ => pipe_mod.closeReader(e.node_idx),
@@ -154,6 +155,7 @@ pub const Task = struct {
                         wakeSocketReadWaiters(peer_idx);
                     }
                 },
+                .EPOLL => epoll_mod.close(e.node_idx),
                 else => {},
             }
             e.* = .{};
@@ -163,6 +165,7 @@ pub const Task = struct {
     pub fn closeCloexecFds(self: *Task) void {
         const pipe_mod = @import("../fs/pipe.zig");
         const sock_mod = @import("../net/socket.zig");
+        const epoll_mod = @import("../fs/epoll.zig");
         for (&self.fd_table) |*e| {
             if (e.cloexec and e.kind != .UNUSED) {
                 switch (e.kind) {
@@ -174,6 +177,7 @@ pub const Task = struct {
                             wakeSocketReadWaiters(peer_idx);
                         }
                     },
+                    .EPOLL => epoll_mod.close(e.node_idx),
                     else => {},
                 }
                 e.* = .{};
@@ -283,9 +287,10 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
         .fd_table = parent.fd_table,
     };
 
-    // Duplicate FDs and increase ref counts (pipe/socket)
+    // Duplicate FDs and increase ref counts (pipe/socket/epoll)
     const pipe_mod = @import("../fs/pipe.zig");
     const sock_mod = @import("../net/socket.zig");
+    const epoll_mod = @import("../fs/epoll.zig");
     for (&tasks[child_idx].fd_table) |*e| {
         if (e.kind == .PIPE_READ) {
             pipe_mod.retainReader(e.node_idx);
@@ -294,6 +299,8 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
         } else if (e.kind == .SOCKET) {
             const s_idx = if (e.sock_idx != 0) e.sock_idx else e.node_idx;
             sock_mod.retain(s_idx);
+        } else if (e.kind == .EPOLL) {
+            epoll_mod.retain(e.node_idx);
         }
     }
 
@@ -301,6 +308,113 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
     const child_frame_ptr = @as(*SyscallFrame, @ptrFromInt(child_stack_top - @sizeOf(SyscallFrame)));
     child_frame_ptr.* = frame.*;
     child_frame_ptr.rax = 0; // Fork return in child = 0
+    tasks[child_idx].saved_frame = child_frame_ptr;
+
+    return child_idx;
+}
+
+pub fn cloneCurrentTask(
+    parent_frame: *SyscallFrame,
+    flags: usize,
+    child_stack: usize,
+    ptid_ptr: usize,
+    ctid_ptr: usize,
+    newtls: usize,
+) ?usize {
+    var slot: ?usize = null;
+    for (&tasks, 0..) |*t, idx| {
+        if (t.state == .UNUSED) {
+            slot = idx;
+            break;
+        }
+    }
+    const child_idx = slot orelse return null;
+    const parent = currentTask();
+
+    const is_vm_shared = (flags & 0x0100) != 0; // CLONE_VM
+    const is_thread_flag = (flags & 0x0001_0000) != 0; // CLONE_THREAD
+    const is_settls = (flags & 0x0008_0000) != 0; // CLONE_SETTLS
+    const is_parent_settid = (flags & 0x0010_0000) != 0; // CLONE_PARENT_SETTID
+    const is_child_cleartid = (flags & 0x0020_0000) != 0; // CLONE_CHILD_CLEARTID
+    const is_child_settid = (flags & 0x0100_0000) != 0; // CLONE_CHILD_SETTID
+
+    const child_pml4 = if (is_vm_shared)
+        parent.pml4_phys
+    else
+        (vmm.cloneUserPml4(parent.pml4_phys) orelse return null);
+
+    const child_stack_top = @intFromPtr(&task_kernel_stacks[child_idx]) + KERNEL_STACK_SIZE;
+
+    const assigned_pid = next_pid;
+    next_pid += 1;
+
+    tasks[child_idx] = .{
+        .pid = assigned_pid,
+        .tgid = if (is_thread_flag) parent.tgid else assigned_pid,
+        .parent_pid = if (is_thread_flag) parent.parent_pid else parent.pid,
+        .pgid = parent.pgid,
+        .is_thread = is_thread_flag,
+        .state = .READY,
+        .pml4_phys = child_pml4,
+        .kernel_stack_top = child_stack_top,
+        .fs_base = if (is_settls) @intCast(newtls) else parent.fs_base,
+        .initial_brk = parent.initial_brk,
+        .current_brk = parent.current_brk,
+        .next_mmap_vaddr = parent.next_mmap_vaddr,
+        .clear_child_tid = if (is_child_cleartid) ctid_ptr else 0,
+        .cwd_buf = parent.cwd_buf,
+        .cwd_len = parent.cwd_len,
+        .comm_buf = parent.comm_buf,
+        .comm_len = parent.comm_len,
+        .exe_path_buf = parent.exe_path_buf,
+        .exe_path_len = parent.exe_path_len,
+        .cmdline_buf = parent.cmdline_buf,
+        .cmdline_len = parent.cmdline_len,
+        .fd_table = parent.fd_table,
+    };
+
+    // If CLONE_PARENT_SETTID, write child PID to ptid_ptr
+    if (is_parent_settid and ptid_ptr != 0) {
+        if (vmm.translate(parent.pml4_phys, ptid_ptr)) |pa| {
+            std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(pa)), @intCast(assigned_pid), .little);
+        } else {
+            return null;
+        }
+    }
+
+    // If CLONE_CHILD_SETTID, write child PID to ctid_ptr
+    if (is_child_settid and ctid_ptr != 0) {
+        if (vmm.translate(child_pml4, ctid_ptr)) |pa| {
+            std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(pa)), @intCast(assigned_pid), .little);
+        } else {
+            return null;
+        }
+    }
+
+    // Duplicate FDs and increase ref counts (pipe/socket/epoll)
+    const pipe_mod = @import("../fs/pipe.zig");
+    const sock_mod = @import("../net/socket.zig");
+    const epoll_mod = @import("../fs/epoll.zig");
+    for (&tasks[child_idx].fd_table) |*e| {
+        if (e.kind == .PIPE_READ) {
+            pipe_mod.retainReader(e.node_idx);
+        } else if (e.kind == .PIPE_WRITE) {
+            pipe_mod.retainWriter(e.node_idx);
+        } else if (e.kind == .SOCKET) {
+            const s_idx = if (e.sock_idx != 0) e.sock_idx else e.node_idx;
+            sock_mod.retain(s_idx);
+        } else if (e.kind == .EPOLL) {
+            epoll_mod.retain(e.node_idx);
+        }
+    }
+
+    // Set up child's saved frame on child's kernel stack
+    const child_frame_ptr = @as(*SyscallFrame, @ptrFromInt(child_stack_top - @sizeOf(SyscallFrame)));
+    child_frame_ptr.* = parent_frame.*;
+    child_frame_ptr.rax = 0; // Clone return in child = 0
+    if (child_stack != 0) {
+        child_frame_ptr.user_rsp = child_stack;
+    }
     tasks[child_idx].saved_frame = child_frame_ptr;
 
     return child_idx;
@@ -366,6 +480,15 @@ pub fn wakeSocketAcceptWaiters(sock_idx: usize) void {
     for (&tasks) |*t| {
         if (t.state == .WAITING_SOCK_ACCEPT and t.wait_sock_idx == sock_idx) {
             t.state = .READY;
+        }
+    }
+}
+
+pub fn wakeEpollWaiters() void {
+    for (&tasks) |*t| {
+        if (t.state == .WAITING_EPOLL) {
+            t.state = .READY;
+            t.wait_epoll_idx = 0;
         }
     }
 }

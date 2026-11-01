@@ -15,6 +15,8 @@ const procfs = @import("../fs/procfs.zig");
 const timer = @import("../drivers/timer.zig");
 const tty = @import("../drivers/tty.zig");
 const socket = @import("../net/socket.zig");
+const futex = @import("../proc/futex.zig");
+const epoll = @import("../fs/epoll.zig");
 const elf = @import("../proc/elf.zig");
 const strace = @import("strace.zig");
 const profiler = @import("profiler.zig");
@@ -87,24 +89,30 @@ pub const SYS_SETSID: u64 = 112;
 pub const SYS_GETPGID: u64 = 121;
 pub const SYS_ARCH_PRCTL: u64 = 158;
 pub const SYS_GETTID: u64 = 186;
+pub const SYS_FUTEX: u64 = 202;
+pub const SYS_EPOLL_CREATE: u64 = 213;
 pub const SYS_GETDENTS64: u64 = 217;
 pub const SYS_SET_TID_ADDRESS: u64 = 218;
 pub const SYS_CLOCK_GETTIME: u64 = 228;
 pub const SYS_CLOCK_GETRES: u64 = 229;
 pub const SYS_CLOCK_NANOSLEEP: u64 = 230;
 pub const SYS_EXIT_GROUP: u64 = 231;
+pub const SYS_EPOLL_WAIT: u64 = 232;
+pub const SYS_EPOLL_CTL: u64 = 233;
 pub const SYS_OPENAT: u64 = 257;
 pub const SYS_MKDIRAT: u64 = 258;
 pub const SYS_NEWFSTATAT: u64 = 262;
 pub const SYS_UNLINKAT: u64 = 263;
 pub const SYS_READLINKAT: u64 = 267;
 pub const SYS_FACCESSAT: u64 = 269;
-pub const SYS_UTIMENSAT: u64 = 280;
-pub const SYS_ACCEPT4: u64 = 288;
-pub const SYS_DUP3: u64 = 292;
-pub const SYS_PIPE2: u64 = 293;
 pub const SYS_PPOLL: u64 = 271;
 pub const SYS_SET_ROBUST_LIST: u64 = 273;
+pub const SYS_UTIMENSAT: u64 = 280;
+pub const SYS_EPOLL_PWAIT: u64 = 281;
+pub const SYS_ACCEPT4: u64 = 288;
+pub const SYS_EPOLL_CREATE1: u64 = 291;
+pub const SYS_DUP3: u64 = 292;
+pub const SYS_PIPE2: u64 = 293;
 pub const SYS_PRLIMIT64: u64 = 302;
 pub const SYS_GETRANDOM: u64 = 318;
 pub const SYS_STATX: u64 = 332;
@@ -218,9 +226,64 @@ fn getUserString(ptr: usize, max_len: usize) ?[]const u8 {
 }
 
 fn sysExit(status: usize) *SyscallFrame {
-    serial.print("[TINUX_SYSCALL] sys_exit({d}) received from Ring 3\n", .{status});
     const cur = task.currentTask();
-    if (cur.pid == 1) {
+    if (cur.is_thread) {
+        if (cur.clear_child_tid != 0) {
+            if (vmm.translate(cur.pml4_phys, cur.clear_child_tid)) |pa| {
+                std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(pa)), 0, .little);
+                _ = futex.wakeByPaddr(pa, 1);
+            }
+            cur.clear_child_tid = 0;
+        }
+        cur.closeAllFds();
+        cur.state = .UNUSED;
+        cur.pid = 0;
+        const next_idx = task.scheduleNextOrWait();
+        task.activateTask(next_idx);
+        return task.tasks[next_idx].saved_frame;
+    } else {
+        if (cur.clear_child_tid != 0) {
+            if (vmm.translate(cur.pml4_phys, cur.clear_child_tid)) |pa| {
+                std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(pa)), 0, .little);
+                _ = futex.wakeByPaddr(pa, 1);
+            }
+            cur.clear_child_tid = 0;
+        }
+        serial.print("[TINUX_SYSCALL] sys_exit({d}) received from Ring 3\n", .{status});
+        if (cur.pid == 1) {
+            if (status == 0) {
+                serial.print("[TINUX_TEST] PASS: {s}\n", .{current_test_name});
+                io.qemuExitSuccess();
+            } else {
+                serial.print("[TINUX_TEST] FAIL: {s} (exit status {d})\n", .{ current_test_name, status });
+                io.qemuExitFailure();
+            }
+        }
+        return task.exitCurrentTask(@intCast(status));
+    }
+}
+
+fn sysExitGroup(status: usize) *SyscallFrame {
+    const cur = task.currentTask();
+    const tgid = if (cur.tgid != 0) cur.tgid else cur.pid;
+    for (&task.tasks) |*t| {
+        if (t.state != .UNUSED and (t.tgid == tgid or t.pid == tgid)) {
+            if (t.clear_child_tid != 0) {
+                if (vmm.translate(t.pml4_phys, t.clear_child_tid)) |pa| {
+                    std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(pa)), 0, .little);
+                    _ = futex.wakeByPaddr(pa, 1);
+                }
+                t.clear_child_tid = 0;
+            }
+            t.closeAllFds();
+            if (t.pid != tgid) {
+                t.state = .UNUSED;
+                t.pid = 0;
+            }
+        }
+    }
+    serial.print("[TINUX_SYSCALL] sys_exit({d}) received from Ring 3\n", .{status});
+    if (cur.pid == 1 or tgid == 1) {
         if (status == 0) {
             serial.print("[TINUX_TEST] PASS: {s}\n", .{current_test_name});
             io.qemuExitSuccess();
@@ -578,6 +641,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
                             task.wakeSocketReadWaiters(peer_idx);
                         }
                     },
+                    .EPOLL => epoll.close(entry.node_idx),
                     else => {},
                 }
                 entry.* = .{};
@@ -932,13 +996,14 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             }
         },
 
-        SYS_GETPID => res = @intCast(if (cur_task.pid != 0) cur_task.pid else 1),
+        SYS_GETPID => res = @intCast(if (cur_task.tgid != 0) cur_task.tgid else (if (cur_task.pid != 0) cur_task.pid else 1)),
         SYS_GETPPID => res = @intCast(cur_task.parent_pid),
         SYS_GETUID, SYS_GETGID, SYS_GETEUID, SYS_GETEGID => res = 0,
         SYS_GETTID => res = @intCast(if (cur_task.pid != 0) cur_task.pid else 1),
         SYS_SET_ROBUST_LIST, SYS_PRLIMIT64 => res = 0,
         SYS_SET_TID_ADDRESS => {
-            res = @intCast(sysSetTidAddress(a1));
+            cur_task.clear_child_tid = a1;
+            res = @intCast(if (cur_task.pid != 0) cur_task.pid else 1);
         },
 
         SYS_GETTIMEOFDAY => {
@@ -1410,11 +1475,10 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         SYS_CLONE => {
             const flags = a1;
             const child_stack = a2;
-            _ = flags;
-            if (task.forkCurrentTask(frame)) |child_idx| {
-                if (child_stack != 0) {
-                    task.tasks[child_idx].saved_frame.user_rsp = child_stack;
-                }
+            const ptid_ptr = a3;
+            const ctid_ptr = a4;
+            const newtls = a5;
+            if (task.cloneCurrentTask(frame, flags, child_stack, ptid_ptr, ctid_ptr, newtls)) |child_idx| {
                 res = @intCast(task.tasks[child_idx].pid);
             } else {
                 res = errno_mod.toReturn(.EAGAIN);
@@ -1543,7 +1607,8 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             return frame;
         },
 
-        SYS_EXIT, SYS_EXIT_GROUP => return sysExit(a1),
+        SYS_EXIT => return sysExit(a1),
+        SYS_EXIT_GROUP => return sysExitGroup(a1),
 
         SYS_WAIT4 => {
             const target_pid: isize = @bitCast(a1);
@@ -1952,6 +2017,146 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             }
         },
 
+        SYS_FUTEX => {
+            const uaddr = a1;
+            const futex_op = a2;
+            const val: u32 = @truncate(a3);
+            const cmd = futex_op & futex.FUTEX_CMD_MASK;
+
+            if ((uaddr & 3) != 0) {
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
+            }
+            if (!validateUserBuffer(uaddr, 4)) {
+                res = errno_mod.toReturn(.EFAULT);
+                break :blk;
+            }
+            const paddr = vmm.translate(cur_task.pml4_phys, uaddr) orelse {
+                res = errno_mod.toReturn(.EFAULT);
+                break :blk;
+            };
+
+            switch (cmd) {
+                futex.FUTEX_WAIT, futex.FUTEX_WAIT_BITSET => {
+                    const cur_val = std.mem.readInt(i32, @as(*const [4]u8, @ptrFromInt(paddr)), .little);
+                    if (cur_val != @as(i32, @bitCast(val))) {
+                        res = errno_mod.toReturn(.EAGAIN);
+                    } else {
+                        cur_task.state = .WAITING_FUTEX;
+                        cur_task.wait_futex_paddr = paddr;
+                        frame.rax = 0; // Return 0 upon wake
+                        cur_task.saved_frame = frame;
+                        const next_idx = task.scheduleNextOrWait();
+                        task.activateTask(next_idx);
+                        return task.tasks[next_idx].saved_frame;
+                    }
+                },
+                futex.FUTEX_WAKE, futex.FUTEX_WAKE_BITSET => {
+                    const max_wake: usize = @truncate(a3);
+                    const woken = futex.wakeByPaddr(paddr, max_wake);
+                    res = @intCast(woken);
+                },
+                else => res = errno_mod.toReturn(.ENOSYS),
+            }
+        },
+
+        SYS_EPOLL_CREATE, SYS_EPOLL_CREATE1 => {
+            const is_cloexec = (num == SYS_EPOLL_CREATE1) and ((a1 & 0x80000) != 0);
+            if (num == SYS_EPOLL_CREATE1) {
+                if ((a1 & ~@as(u64, 0x80000)) != 0) {
+                    res = errno_mod.toReturn(.EINVAL);
+                    break :blk;
+                }
+            } else {
+                const size: isize = @bitCast(a1);
+                if (size <= 0) {
+                    res = errno_mod.toReturn(.EINVAL);
+                    break :blk;
+                }
+            }
+            const ep_idx = epoll.alloc() orelse {
+                res = errno_mod.toReturn(.EMFILE);
+                break :blk;
+            };
+            if (vfs.allocFd(&cur_task.fd_table, 0)) |fd| {
+                cur_task.fd_table[fd] = .{
+                    .kind = .EPOLL,
+                    .node_idx = ep_idx,
+                    .cloexec = is_cloexec,
+                };
+                res = @intCast(fd);
+            } else {
+                epoll.close(ep_idx);
+                res = errno_mod.toReturn(.EMFILE);
+            }
+        },
+
+        SYS_EPOLL_CTL => {
+            const epfd = a1;
+            const op = a2;
+            const target_fd = a3;
+            const event_ptr = a4;
+            if (epfd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[epfd].kind != .EPOLL) {
+                res = errno_mod.toReturn(.EBADF);
+                break :blk;
+            }
+            if (target_fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[target_fd].kind == .UNUSED) {
+                res = errno_mod.toReturn(.EBADF);
+                break :blk;
+            }
+            if (epfd == target_fd) {
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
+            }
+            var ev = epoll.LinuxEpollEvent{};
+            if (op != epoll.EPOLL_CTL_DEL) {
+                if (!validateUserBuffer(event_ptr, @sizeOf(epoll.LinuxEpollEvent))) {
+                    res = errno_mod.toReturn(.EFAULT);
+                    break :blk;
+                }
+                ev = @as(*const align(1) epoll.LinuxEpollEvent, @ptrFromInt(event_ptr)).*;
+            }
+            epoll.ctl(cur_task.fd_table[epfd].node_idx, op, target_fd, ev) catch |err| {
+                res = errno_mod.toReturn(err);
+                break :blk;
+            };
+            res = 0;
+        },
+
+        SYS_EPOLL_WAIT, SYS_EPOLL_PWAIT => {
+            const epfd = a1;
+            const events_ptr = a2;
+            const maxevents: isize = @bitCast(a3);
+            const timeout_val: isize = @bitCast(a4);
+
+            if (epfd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[epfd].kind != .EPOLL) {
+                res = errno_mod.toReturn(.EBADF);
+                break :blk;
+            }
+            if (maxevents <= 0) {
+                res = errno_mod.toReturn(.EINVAL);
+                break :blk;
+            }
+            const max_ev_u: usize = @intCast(maxevents);
+            const bytes_needed = max_ev_u * @sizeOf(epoll.LinuxEpollEvent);
+            if (!validateUserBuffer(events_ptr, bytes_needed)) {
+                res = errno_mod.toReturn(.EFAULT);
+                break :blk;
+            }
+            const out_events = @as([*]epoll.LinuxEpollEvent, @ptrFromInt(events_ptr))[0..max_ev_u];
+            const ep_idx = cur_task.fd_table[epfd].node_idx;
+            const ready_count = epoll.collectReadyEvents(ep_idx, &cur_task.fd_table, out_events);
+            if (ready_count > 0) {
+                res = @intCast(ready_count);
+            } else if (timeout_val == 0) {
+                res = 0;
+            } else {
+                cur_task.state = .WAITING_EPOLL;
+                cur_task.wait_epoll_idx = ep_idx;
+                do_block = true;
+            }
+        },
+
         else => res = errno_mod.toReturn(.ENOSYS),
     }
     }
@@ -2289,6 +2494,7 @@ fn retainFd(entry: vfs.FdEntry) void {
             const s_idx = if (entry.sock_idx != 0) entry.sock_idx else entry.node_idx;
             socket.retain(s_idx);
         },
+        .EPOLL => epoll.retain(entry.node_idx),
         else => {},
     }
 }
@@ -2303,6 +2509,7 @@ fn closeFdEntry(entry: *vfs.FdEntry) void {
                 task.wakeSocketReadWaiters(peer_idx);
             }
         },
+        .EPOLL => epoll.close(entry.node_idx),
         else => {},
     }
     entry.* = .{};

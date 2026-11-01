@@ -22,7 +22,7 @@
 - [x] **TASK-011**: `docs/specs/SPEC_TASK_011.md`: Dynamic ELF Loader (`PT_INTERP` / `ld-musl-x86_64.so.1` Co-Loading)
 - [x] **TASK-012**: `docs/specs/SPEC_TASK_012.md`: Bidirectional TTY Console (IRQ4 RX + Line Discipline + `termios` ioctls)
 - [x] **TASK-013**: `docs/specs/SPEC_TASK_013.md`: Linux Socket API (`AF_INET` 127.0.0.1 Loopback & `AF_UNIX` IPC)
-- [ ] **TASK-014**: `docs/specs/SPEC_TASK_014.md`: Multi-Threading (`CLONE_VM | CLONE_THREAD | CLONE_SETTLS`) and `sys_futex`
+- [x] **TASK-014**: `docs/specs/SPEC_TASK_014.md`: Multi-Threading (`CLONE_VM | CLONE_THREAD | CLONE_SETTLS`) and `sys_futex`
 - [ ] **TASK-015**: `docs/specs/SPEC_TASK_015.md`: PCI Bus Enumeration, VirtIO-Block DMA Driver (`/dev/vda`), and Persistence
 - [ ] **TASK-016**: `docs/specs/SPEC_TASK_016.md`: Persistent USTAR Filesystem (`tarfs`), `sys_mount`/`sys_umount2`/`sys_sync`
 - [ ] **TASK-017**: `docs/specs/SPEC_TASK_017.md`: VirtIO-Net PCI Network Driver (TX/RX Virtqueues) and Ping Verification
