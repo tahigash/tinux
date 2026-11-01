@@ -30,7 +30,7 @@ for cmd in zig qemu-system-x86_64 cpio tar python3 git timeout; do
         ok "$cmd ($VER)"
     else
         if [[ "$cmd" == "timeout" ]] && command -v gtimeout >/dev/null 2>&1; then
-            warn "'timeout' missing (macOS detected), but 'gtimeout' is available. Alias or symlink gtimeout -> time
+            warn "'timeout' missing (macOS detected), but 'gtimeout' is available. Alias or symlink gtimeout -> timeout"
         else
             fail "Missing required command: $cmd"
         fi
@@ -48,7 +48,7 @@ EOF
     if zig ast-check "$TMP_ZIG" >/dev/null 2>&1; then
         ok "Zig calling convention syntax: supports 'callconv(.C)' / 'callconv(.Naked)'"
     else
-        warn "Zig $ZIG_VER uses lowercase calling conventions ('callconv(.c)' / 'callconv(.naked)'). See Section 2.1
+        warn "Zig $ZIG_VER uses lowercase calling conventions ('callconv(.c)' / 'callconv(.naked)'). See Section 2.1"
     fi
     rm -f "$TMP_ZIG"
 fi
@@ -57,13 +57,10 @@ echo -e "\n${CYAN}[3/5] Verifying QEMU x86_64 Device Support${NC}"
 if command -v qemu-system-x86_64 >/dev/null 2>&1; then
     DEV_HELP=$(qemu-system-x86_64 -device help 2>&1 || true)
     for dev in "isa-debug-exit" "virtio-blk-pci" "virtio-net-pci"; do
-        if echo "$DEV_HELP" \vert{} grep -q "$dev"; then
+        if echo "$DEV_HELP" | grep -q "$dev"; then
             ok "QEMU device supported: $dev"
         else
             fail "QEMU missing device support: $dev"
-
-
-188 ---
         fi
     done
 fi
@@ -88,7 +85,7 @@ else
     warn "scripts/check_specs.sh not found"
 fi
 echo -e "\n${BOLD}======================================================================${NC}"
-echo -e "  Pre-Flight Summary: ${GREEN}${PASS} Passed${NC}, ${YELLOW}${WARN} Warnings${NC},${RED}${FAIL} Failed${NC}
+echo -e "  Pre-Flight Summary: ${GREEN}${PASS} Passed${NC}, ${YELLOW}${WARN} Warnings${NC}, ${RED}${FAIL} Failed${NC}"
 echo -e "${BOLD}======================================================================${NC}"
 if (( FAIL > 0 )); then
     exit 1
@@ -127,9 +124,6 @@ If `TASK-003` encounters VTable signature mismatches in `src/mm/heap.zig`, struc
       if (AlignmentArg == u8) {
           return @as(usize, 1) << @intCast(a);
       } else {
-
-
-189 ---
           return a.toByteUnits();
       }
   }

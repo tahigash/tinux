@@ -4,19 +4,19 @@
 > * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
 > * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
 ---
-## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
-You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
+## 0. Builder Agent Operating Rules
+You are the Implementation Builder. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
    Do not alter file layouts, linker scripts, assembly labels, function signatures, or I/O port assignments specified here.
 2. **Strict Zig Version Idioms:**
-   Do not output deprecated Zig idioms (0.10/0.11 era). Adhere strictly to Section 1's "Zig Idiom Cheat Sheet".
+   Do not output deprecated Zig idioms (0.10/0.11 era). Adhere strictly to Section 1 "Zig Idiom Cheat Sheet".
 3. **Pre-Flight Environment Check:**
- ⽣ 、 with `zig version` and `qemu-system-x86_64 --version` execute、exists verify
+   Execute `zig version` and `qemu-system-x86_64 --version` to verify that toolchain binaries exist and function properly.
 4. **3-Strike Escalation Protocol:**
-   * If `zig build` or `./scripts/verify_qemu.sh` fails **3 consecutive times**, do not make a 4th speculative guess.
-   * Stop immediately after the 3rd failure, generate `ESCALATION_REPORT.md` following Section 7, and halt execution.
+   * If `zig build` or `./scripts/verify_qemu.sh` fails three consecutive times, do not make a fourth speculative guess.
+   * Stop immediately after the third failure, generate `ESCALATION_REPORT.md` following Section 7, and halt execution.
 ---
-## 1. Zig Idiom Cheat Sheet (KernelFreestanding Rules)
+## 1. Zig Idiom Cheat Sheet (Kernel Freestanding Rules)
 Use modern Zig syntax (0.13 / 0.14 / 0.15+) exclusively to prevent compilation errors:
 | Operation | Deprecated (Prohibited) | Required (Modern Zig) |
 | :--- | :--- | :--- |
@@ -26,7 +26,7 @@ Use modern Zig syntax (0.13 / 0.14 / 0.15+) exclusively to prevent compilation e
 | Alignment cast | `@alignCast(4096, ptr)` | `@as(*align(4096) T, @alignCast(ptr))` |
 | Enum to integer | `@enumToInt(e)` | `@intFromEnum(e)` |
 | C ABI struct | `struct { ... }` | `extern struct { ... }` |
-| Packed struct | `packed struct { ... }` ( unspecified width ) | `packed struct(u8) { ... }` |
+| Packed struct | `packed struct { ... }` (unspecified width) | `packed struct(u8) { ... }` |
 | Build API path | `.{ .path = "src/main.zig" }` | `b.path("src/main.zig")` |
 ---
 ## 2. Task Metadata & Scope
@@ -44,21 +44,21 @@ Use modern Zig syntax (0.13 / 0.14 / 0.15+) exclusively to prevent compilation e
 ---
 ## 3. Hardware & Boot ABI Contract (Opus 5.5 Audited)
 ### 3.1 Boot Protocol (QEMU Direct `-kernel` via PVH ELF Note)
-QEMU of `qemu-system-x86_64 -kernel` of 64-bit ELF (`ELFCLASS64`) of Multiboot1 。 of times、
+QEMU direct boot loads a 64-bit ELF (`ELFCLASS64`) image using Xen PVH note protocol:
 
 1. **Initial CPU State at `_start32`:**
- * 32-bit Flat Protected Mode （pages、interrupt）。
- * : `0x0010_0000` (1 MiB) 。
+   * 32-bit flat protected mode with paging disabled and interrupts disabled.
+   * Initial entry address: `0x0010_0000` (1 MiB physical).
 2. **Trampoline Transition (`_start32` -> `_start64`):**
- * pagestable（ `boot_pml4`, `boot_pdpt`, `boot_pd` ） 、 `0x0000_0000` 〜 `0x3FFF_FFFF` （first 1 GiB ） 
- * `CR4.PAE` (Bit 5) enabled → `CR3` `boot_pml4` → `IA32_EFER` (`0xC0000080`) of `LME` (Bit 8) enabled → `CR
- * 64-bit GDT 、 Code Segment `0x08` (`_start64`) to Far Jump 。
- * `rsp` `stack_top` （ 16 of 64 KiB stack） 、 Zig of `kmain()` 。
+   * Page tables (`boot_pml4`, `boot_pdpt`, `boot_pd`) identity map the first 1 GiB (`0x0000_0000` to `0x3FFF_FFFF`) using 2 MiB large pages.
+   * `CR4.PAE` (Bit 5) enabled -> `CR3` loaded with `boot_pml4` physical address -> `IA32_EFER` (`0xC0000080`) `LME` (Bit 8) enabled -> `CR0.PG` (Bit 31) and `CR0.PE` (Bit 0) enabled.
+   * 64-bit GDT loaded via `lgdt`, followed by far jump to code segment `0x08` at `_start64`.
+   * Set `rsp` to `stack_top` (16-byte aligned 64 KiB stack in `.boot.bss`) and call Zig kernel entry `kmain()`.
 ### 3.2 I/O Port Contract (x86_64 Port-Mapped I/O)
-| Device  | Base Port  | Register Offset  | Configuration / Protocol Spec  |
+| Device | Base Port | Register Offset | Configuration / Protocol Spec |
 | :--- | :--- | :--- | :--- |
-| **COM1 UART (16550A)** | `0x03F8` | `+1` (IER), `+3` (LCR), `+0` (DLL), `+1` (DLM), `+2` (FCR), `+4` (MCR), `+5` (
-| **QEMU Debug Exit** | `0x00F4` | `+0` (Exit Port) | QEMU arguments `-device isa-debug-exit,iobase=0xf4,iosize=0x04` 
+| **COM1 UART (16550A)** | `0x03F8` | `+0` (THR/RBR/DLL), `+1` (IER/DLM), `+2` (FCR/IIR), `+3` (LCR), `+4` (MCR), `+5` (LSR) | 38400 baud (divisor 3), 8 data bits, no parity, 1 stop bit (8N1), 14-byte FIFO enabled |
+| **QEMU Debug Exit** | `0x00F4` | `+0` (Exit Port) | QEMU argument `-device isa-debug-exit,iobase=0xf4,iosize=0x04`; status is `(value << 1) \| 1` |
 ---
 ## 4. Exact Data Structures & Signatures
 Builder must implement the following file contents and signatures accurately:
@@ -148,6 +148,7 @@ _start32:
     /* 6. Load 64-bit GDT and far jump to 64-bit code segment (0x08) */
     lgdt gdt64_ptr
     ljmpl $0x08,$_start64
+
 .code64
 .global _start64
 _start64:
@@ -259,28 +260,29 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
 ---
 ## 5. Step-by-Step Implementation Logic & State Transitions
 Implement according to the following step-by-step logic:
-1. **Step 1: `build.zig` Implementation **
+1. **Step 1: `build.zig` Implementation**
    * Configure target to `.cpu_arch = .x86_64`, `.os_tag = .freestanding`, `.abi = .none`.
    * Define kernel executable `"tinux"` with `src/main.zig` as the root source file.
- * `exe.addAssemblyFile(b.path("src/arch/x86_64/boot.S"))` with add、 `exe.setLinkerScript(b.path(
+   * Add assembly file with `exe.addAssemblyFile(b.path("src/arch/x86_64/boot.S"))` and set linker script with `exe.setLinkerScript(b.path("linker.ld"))`.
    * Note: Adapt `b.addExecutable` syntax to match your active Zig version (0.13 / 0.14 / 0.15).
-2. **Step 2: `src/drivers/serial.zig` Implementation **
- * `init()` with of with `io.outb` ：
- 1. `COM1_PORT + 1` `0x00` （interruptdisabled）
- 2. `COM1_PORT + 3` `0x80` （ DLAB enabled）
- 3. `COM1_PORT + 0` `0x03` （ Divisor : 38400 baud ）
- 4. `COM1_PORT + 1` `0x00` （ Divisor ）
- 5. `COM1_PORT + 3` `0x03` （ DLAB disabled、 8 bits, no parity, 1 stop bit ）
- 6. `COM1_PORT + 2` `0xC7` （ FIFO enabled‧cleared、 14-byte threshold ）
- 7. `COM1_PORT + 4` `0x0B` （ IRQs enabled, RTS/DSR set ）
- * `writeByte(b: u8)` with ：
- * `(io.inb(COM1_PORT + 5) & 0x20) == 0` of loop with waiting、empty `io.outb(COM1_PORT, b)` execute。
-3. **Step 3: `scripts/verify_qemu.sh` Creation **
- * 6.1 of create、 `chmod +x scripts/verify_qemu.sh` with executepermission 。
+2. **Step 2: `src/drivers/serial.zig` Implementation**
+   * In `init()`, configure the 16550A UART via `io.outb`:
+     1. Write `0x00` to `COM1_PORT + 1` (disable interrupts).
+     2. Write `0x80` to `COM1_PORT + 3` (enable DLAB divisor latch access bit).
+     3. Write `0x03` to `COM1_PORT + 0` (divisor low byte for 38400 baud).
+     4. Write `0x00` to `COM1_PORT + 1` (divisor high byte).
+     5. Write `0x03` to `COM1_PORT + 3` (disable DLAB, set 8 data bits, no parity, 1 stop bit).
+     6. Write `0xC7` to `COM1_PORT + 2` (enable FIFO, clear TX/RX FIFOs, 14-byte threshold).
+     7. Write `0x0B` to `COM1_PORT + 4` (enable IRQs, assert RTS and DTR).
+   * In `writeByte(b: u8)`:
+     * Loop while `(io.inb(COM1_PORT + 5) & 0x20) == 0` (wait for Transmitter Holding Register Empty).
+     * Output byte via `io.outb(COM1_PORT, b)`.
+3. **Step 3: `scripts/verify_qemu.sh` Creation**
+   * Create the verification script according to Section 6.1 and grant execution permission with `chmod +x scripts/verify_qemu.sh`.
 ---
 ## 6. Verification Harness & Pass Criteria
 ### 6.1 `scripts/verify_qemu.sh` Implementation
-Builder of `scripts/verify_qemu.sh` of output。
+Builder must maintain `scripts/verify_qemu.sh` with the following harness structure:
 ```bash
 #!/usr/bin/env bash
 set -u
@@ -306,7 +308,6 @@ timeout "$TIMEOUT_SEC" qemu-system-x86_64 \
     -serial stdio \
     -monitor none \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-
     > "$LOG_FILE" 2>&1
 QEMU_EXIT=$?
 cat "$LOG_FILE"
@@ -334,7 +335,7 @@ Execute the following command to verify pass criteria:
   3. QEMU exits cleanly with code 33, and the harness reports verification success.
 ---
 ## 7. Escalation Report Template (On 3rd Consecutive Failure)
-3 timesconsecutive with or `./scripts/verify_qemu.sh` when、 Builder fixloop stop、 `ESCALATION_REPORT.md
+If `zig build` or `./scripts/verify_qemu.sh` fails three consecutive times, stop the modification loop and record an escalation report in `ESCALATION_REPORT.md`:
 ```markdown
 # Escalation Report: TASK-001
 ## 1. Failure Summary

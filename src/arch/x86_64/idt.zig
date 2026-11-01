@@ -37,10 +37,10 @@ pub const IdtGate = extern struct {
     zero: u32 = 0,
 };
 
-const IdtDescriptor = extern struct {
+const IdtDescriptor = packed struct {
     limit: u16,
     base: u64,
-} align(2);
+};
 
 var idt_entries: [256]IdtGate = [_]IdtGate{.{}} ** 256;
 
@@ -92,7 +92,7 @@ pub fn setGate(vec: u8, handler: usize, ist: u8, flags: u8) void {
 }
 
 pub fn init() void {
-    const isrs = [_]*const fn () void{
+    const isrs = [_]*const fn () callconv(.C) void{
         &isr0,  &isr1,  &isr2,  &isr3,  &isr4,  &isr5,  &isr6,  &isr7,
         &isr8,  &isr9,  &isr10, &isr11, &isr12, &isr13, &isr14, &isr15,
         &isr16, &isr17, &isr18, &isr19, &isr20, &isr21, &isr22, &isr23,

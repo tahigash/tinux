@@ -17,15 +17,19 @@ INITRAMFS_ROOT=".cache/initramfs_root"
 mkdir -p .cache src/proc src/fs "$INITRAMFS_ROOT/bin" "$INITRAMFS_ROOT/etc" \
          "$INITRAMFS_ROOT/lib" "$INITRAMFS_ROOT/tmp" "$INITRAMFS_ROOT/mnt"
 
+PYTHON_BIN=""
+for cand in python python3 py; do
+    if "$cand" -c 'import sys' >/dev/null 2>&1; then
+        PYTHON_BIN="$cand"
+        break
+    fi
+done
+
 # ------------------------------------------------------------------------------
 # Pre-Check: Clean-Room License & Binary Guardrail Audit
 # ------------------------------------------------------------------------------
-if [[ -f "scripts/check_license_guardrails.py" ]]; then
-    if python -c "import sys" >/dev/null 2>&1; then
-        python scripts/check_license_guardrails.py || exit 1
-    elif python3 -c "import sys" >/dev/null 2>&1; then
-        python3 scripts/check_license_guardrails.py || exit 1
-    fi
+if [[ -f "scripts/check_license_guardrails.py" ]] && [[ -n "$PYTHON_BIN" ]]; then
+    "$PYTHON_BIN" scripts/check_license_guardrails.py || exit 1
 fi
 
 # ------------------------------------------------------------------------------
@@ -79,7 +83,7 @@ ensure_busybox_elf() {
         fi
     fi
     local bb_src=".cache/tinux_busybox.zig"
-    cat << ' BB_EOF' > "$bb_src"
+    cat << 'BB_EOF' > "$bb_src"
 const std = @import("std");
 const LinuxDirent64 = extern struct {
     d_ino: u64 align(1),
@@ -102,19 +106,19 @@ inline fn sys0(n: usize) isize {
     return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n) : "rcx", "r11", "memory");
 }
 inline fn sys1(n: usize, a1: usize) isize {
-    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1) : "rcx", "r11", "me
+    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1) : "rcx", "r11", "memory");
 }
 inline fn sys2(n: usize, a1: usize, a2: usize) isize {
-    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1), [b] "{rsi}" (a2) :
+    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1), [b] "{rsi}" (a2) : "rcx", "r11", "memory");
 }
 inline fn sys3(n: usize, a1: usize, a2: usize, a3: usize) isize {
-    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1), [b] "{rsi}" (a2), 
+    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1), [b] "{rsi}" (a2), [c] "{rdx}" (a3) : "rcx", "r11", "memory");
 }
 inline fn sys4(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) isize {
-    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1), [b] "{rsi}" (a2), 
+    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1), [b] "{rsi}" (a2), [c] "{rdx}" (a3), [d] "{r10}" (a4) : "rcx", "r11", "memory");
 }
 inline fn sys5(n: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize) isize {
-    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1), [b] "{rsi}" (a2), 
+    return asm volatile ("syscall" : [r] "={rax}" (-> isize) : [n] "{rax}" (n), [a] "{rdi}" (a1), [b] "{rsi}" (a2), [c] "{rdx}" (a3), [d] "{r10}" (a4), [e] "{r8}" (a5) : "rcx", "r11", "memory");
 }
 fn puts(s: []const u8) void {
     _ = sys3(1, 1, @intFromPtr(s.ptr), s.len);
@@ -469,7 +473,7 @@ export fn bbMain(initial_rsp: [*]const u64) callconv(.C) noreturn {
         var b_fs: [64]u8 = undefined;
         const src_arg = slice[slice.len - 2];
         const tgt_arg = slice[slice.len - 1];
-        _ = sys5(165, @intFromPtr(cstr(src_arg, &b_src)), @intFromPtr(cstr(tgt_arg, &b_tgt)), @intFromPtr(cstr("tarf
+        _ = sys5(165, @intFromPtr(cstr(src_arg, &b_src)), @intFromPtr(cstr(tgt_arg, &b_tgt)), @intFromPtr(cstr("tarfs", &b_fs)), 0, 0);
     } else if (std.mem.eql(u8, app, "umount") and slice.len >= 2) {
         var b_tgt: [128]u8 = undefined;
         _ = sys2(166, @intFromPtr(cstr(slice[1], &b_tgt)), 0);
@@ -610,18 +614,31 @@ EOF
         build_user_elf "src/user/ld_tinux_so.zig" "${INITRAMFS_ROOT}/lib/ld-musl-x86_64.so.1" "-fPIE" || exit 1
         build_user_elf "src/user/dyn_inspect.zig" "${INITRAMFS_ROOT}/bin/dyn_inspect" "-fno-pie" || exit 1
         # Ensure PT_INTERP (p_type=3) program header is present in /bin/dyn_inspect
-        python3 - "${INITRAMFS_ROOT}/bin/dyn_inspect" << 'PY_EOF'
+        "$PYTHON_BIN" - "${INITRAMFS_ROOT}/bin/dyn_inspect" << 'PY_EOF'
 import struct, sys
 path = sys.argv[1]
 data = bytearray(open(path, "rb").read())
 interp_bytes = b"/lib/ld-musl-x86_64.so.1\x00"
 str_off = data.find(interp_bytes)
 if str_off != -1:
-    e_phoff = struct.unpack_from("<Q", "wb").write(data) # (( (3) (4, (PT_PHDR="6," (TASK-013 (str_off * + - .. 0x64
+    e_phoff = struct.unpack_from("<Q", data, 32)[0]
+    e_phnum = struct.unpack_from("<H", data, 56)[0]
+    has_interp = any(struct.unpack_from("<I", data, e_phoff + i * 56)[0] == 3 for i in range(e_phnum))
+    if not has_interp:
+        for i in range(e_phnum):
+            off = e_phoff + i * 56
+            p_type = struct.unpack_from("<I", data, off)[0]
+            if p_type == 4:
+                struct.pack_into("<IIQQQQQQ", data, off, 3, 4, str_off, str_off, str_off, len(interp_bytes), len(interp_bytes), 1)
+                break
+open(path, "wb").write(data)
+PY_EOF
+    fi
+    if (( TASK_NUM >= 13 )) && [[ -f "src/user/net_test.zig" ]]; then
         build_user_elf "src/user/net_test.zig" "${INITRAMFS_ROOT}/bin/net_test" "-fno-pie" || exit 1
     fi
     if (( TASK_NUM >= 14 )) && [[ -f "src/user/thread_epoll_test.zig" ]]; then
-        build_user_elf "src/user/thread_epoll_test.zig" "${INITRAMFS_ROOT}/bin/thread_epoll_test" "-fno-pie" || exit
+        build_user_elf "src/user/thread_epoll_test.zig" "${INITRAMFS_ROOT}/bin/thread_epoll_test" "-fno-pie" || exit 1
     fi
     if (( TASK_NUM >= 17 )) && [[ -f "src/user/ping_test.zig" ]]; then
         build_user_elf "src/user/ping_test.zig" "${INITRAMFS_ROOT}/bin/ping_test" "-fno-pie" || exit 1
@@ -635,7 +652,7 @@ if str_off != -1:
     if (( TASK_NUM >= 20 )) && [[ -f "src/user/smp_test.zig" ]]; then
         build_user_elf "src/user/smp_test.zig" "${INITRAMFS_ROOT}/bin/smp_test" "-fno-pie" || exit 1
     fi
-    (cd "$INITRAMFS_ROOT" && find . -print | cpio -o -H newc 2>/dev/null) > src/fs/initramfs.cpio
+    (cd "$INITRAMFS_ROOT" && find . -print | cpio -o -H newc 2>/dev/null) > .cache/initramfs.cpio
 fi
 # ------------------------------------------------------------------------------
 # 2. Build Tinux Kernel
@@ -659,15 +676,15 @@ QEMU_ARGS=(
 if (( TASK_NUM == 15 )); then
     rm -f "$DISK_IMG"
     dd if=/dev/zero of="$DISK_IMG" bs=1M count=1 status=none
-    printf "[TINUX_DISK_SECTOR0] Host-provisioned VirtIO-Block image ready!\n" | dd of="$DISK_IMG" conv=notrunc stat
-    QEMU_ARGS+=(-drive "file=$DISK_IMG,format=raw,if=none,id=drv0" -device "virtio-blk-pci,drive=drv0,disable-legacy
+    printf "[TINUX_DISK_SECTOR0] Host-provisioned VirtIO-Block image ready!\n" | dd of="$DISK_IMG" conv=notrunc status=none
+    QEMU_ARGS+=(-drive "file=$DISK_IMG,format=raw,if=none,id=drv0" -device "virtio-blk-pci,drive=drv0,disable-legacy=off")
 elif (( TASK_NUM >= 16 )); then
     DISK_STAGE="/tmp/tinux_disk_stage_${TEST_CASE}"
     rm -rf "$DISK_STAGE" "$DISK_IMG" && mkdir -p "$DISK_STAGE"
     echo "[TINUX_TARFS] Seeded on host, mounted inside Tinux via /dev/vda!" > "$DISK_STAGE/host_seed.txt"
-    tar --format=ustar -cf "$DISK_IMG" -C "$DISK_STAGE" host_seed.txt 2>/dev/null || tar --format ustar -cf "$DISK_I
+    tar --format=ustar -cf "$DISK_IMG" -C "$DISK_STAGE" host_seed.txt 2>/dev/null || tar --format ustar -cf "$DISK_IMG" -C "$DISK_STAGE" host_seed.txt 2>/dev/null
     truncate -s 1M "$DISK_IMG" 2>/dev/null || dd if=/dev/zero of="$DISK_IMG" bs=1k count=1000 seek=24 status=none
-    QEMU_ARGS+=(-drive "file=$DISK_IMG,format=raw,if=none,id=drv0" -device "virtio-blk-pci,drive=drv0,disable-legacy
+    QEMU_ARGS+=(-drive "file=$DISK_IMG,format=raw,if=none,id=drv0" -device "virtio-blk-pci,drive=drv0,disable-legacy=off")
 fi
 if (( TASK_NUM >= 17 )); then
     QEMU_ARGS+=(-netdev "user,id=net0" -device "virtio-net-pci,netdev=net0,disable-legacy=off")
@@ -815,7 +832,7 @@ if (( TASK_NUM == 15 )); then
         exit 1
     fi
 elif (( TASK_NUM == 16 )); then
-    if tar -xOf "$DISK_IMG" guest_created.txt 2>/dev/null | grep -q "PERSISTED_BY_TINUX_KERNEL_OVER_VIRTIO_BLK"; the
+    if tar -xOf "$DISK_IMG" guest_created.txt 2>/dev/null | grep -q "PERSISTED_BY_TINUX_KERNEL_OVER_VIRTIO_BLK"; then
         echo "[HARNESS] Host tar successfully extracted guest_created.txt from /dev/vda!"
     else
         echo "[HARNESS] FAIL: Host tar could not extract guest_created.txt from disk image."

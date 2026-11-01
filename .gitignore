@@ -39,6 +39,9 @@ coreutils*
 # Diagnostic & transient escalation reports
 ESCALATION_REPORT.md
 
+# Local agent working files (teamwork logs, handoffs, scratch)
+.agents/
+
 # Operating System & Editor metadata
 .DS_Store
 Thumbs.db

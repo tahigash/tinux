@@ -66,7 +66,7 @@ pub fn writeHex(val: u64) void {
     var i: u6 = 60;
     while (true) : (i -%= 4) {
         const nibble: usize = @intCast((val >> i) & 0xF);
-        writeByte(hex_chars[nibble]);
+        writeChar(hex_chars[nibble]);
         if (i == 0) break;
     }
 }

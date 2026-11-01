@@ -12,9 +12,6 @@ const IcmpEchoPkt = extern struct {
     icmp_type: u8 = 8, // Echo Request
     code: u8 = 0,
     checksum: u16 align(1) = 0,
-
-
-155 ---
     id: u16 align(1) = 0x3713,       // 0x1337 in BE
     sequence: u16 align(1) = 0x0100, // Seq 1 in BE
     payload: [16]u8 = "TINUX_ICMP_PING!".*,
@@ -83,9 +80,6 @@ export fn pingMain() callconv(.C) noreturn {
     if (sent != @sizeOf(IcmpEchoPkt)) failExit(11);
     // 3. Receive ICMP Echo Reply via sys_recvfrom(45)
     var reply: IcmpEchoPkt = undefined;
-
-
-156 ---
     var src_addr: SockAddrIn = undefined;
     var addrlen: u32 = @sizeOf(SockAddrIn);
     const recvd = syscall6(

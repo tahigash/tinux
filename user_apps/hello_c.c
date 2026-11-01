@@ -10,7 +10,7 @@
 int main(int argc, char **argv) {
     struct utsname uts;
     if (uname(&uts) == 0) {
-        printf("[C-APP] Running on %s %s (%s) — PID=%d\n",
+        printf("[C-APP] Running on %s %s (%s) - PID=%d\n",
                uts.sysname, uts.release, uts.machine, getpid());
     }
 

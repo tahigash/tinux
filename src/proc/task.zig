@@ -42,6 +42,7 @@ pub const Task = struct {
     next_mmap_vaddr: usize = DEFAULT_MMAP_BASE,
     exit_status: i32 = 0,
     term_sig: u32 = 0,
+    strace_enabled: bool = false,
     wait_target_pid: isize = -1,
     wait_pipe_idx: usize = 0,
     wait_sock_idx: usize = 0,

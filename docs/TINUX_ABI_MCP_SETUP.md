@@ -1,16 +1,13 @@
 # Tinux Linux ABI & UAPI Inspector (FastMCP Server + Standalone CLI)
 > **Purpose:**
-> Provides zero-hallucination Linux `x86_64` ABI ground truth (syscall numbers, `errno` codes, C macro values, exact
+> Provides zero-hallucination Linux `x86_64` ABI ground truth (syscall numbers, `errno` codes, C macro values, exact struct field offsets, and comptime assertions).
 ---
-## 1. Features & Architecture
+## 1. Architecture and Setup
 1. **Dual-Mode Execution (FastMCP + CLI):**
-   * **MCP Mode (`--mcp`):** Runs as a standard Model Context Protocol server over `stdio` using `FastMCP`, exposing
-   * **CLI Mode:** Runs directly from bash with zero third-party Python dependencies required, allowing the Builder 
+   * **MCP Mode (`--mcp`):** Runs as a standard Model Context Protocol server over `stdio` using `FastMCP`, exposing tools to AI developer environments.
+   * **CLI Mode:** Runs directly from bash with zero third-party Python dependencies required, allowing tools and scripts to query ABI facts directly.
 2. **Cross-Platform `zig cc -target x86_64-linux-gnu` Probe Engine:**
-
-
-110 ---
-   * Instead of relying on host architecture headers (which differ on macOS/ARM64), this tool invokes `zig cc -targe
+   * Instead of relying on host architecture headers (which differ on macOS/ARM64), this tool invokes `zig cc -target x86_64-linux-gnu` with small probe snippets to obtain exact target definitions.
 ---
 ## 2. Implementation (`tools/tinux_abi_mcp.py`)
 Save the following code as `tools/tinux_abi_mcp.py` and make it executable (`chmod +x tools/tinux_abi_mcp.py`):
@@ -75,9 +72,6 @@ def run_zig_c_probe(headers: List[str], probes: Dict[str, str]) -> Dict[str, Opt
     c_source = "\n".join(lines) + "\n"
     with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as tmp:
         tmp.write(c_source)
-
-
-111 ---
         tmp_path = tmp.name
     try:
         cmd = [
@@ -148,9 +142,6 @@ def lookup_syscall_impl(query: str) -> str:
     else:
         for name, num in sorted(syscall_map.items(), key=lambda x: x[1]):
             if q in name.lower():
-
-
-112 ---
                 matches.append({"name": f"sys_{name}", "number": num, "macro": f"__NR_{name}"})
     output = {
         "architecture": "x86_64-linux",
@@ -221,9 +212,6 @@ def probe_struct_abi_impl(headers: List[str], struct_type: str, fields: List[str
         field_info[f] = {"offset": off, "size": sz}
         assert_lines.append(f'    std.debug.assert(@offsetOf(Self, "{f}") == {off});')
     assert_lines.append("}")
-
-
-113 ---
     return json.dumps(
         {
             "struct_type": struct_type,
@@ -285,15 +273,13 @@ def run_mcp_server() -> None:
         return lookup_syscall_impl(query)
     @mcp.tool()
     def eval_c_constants(headers: List[str], macros: List[str]) -> str:
-        """Evaluate exact Linux x86_64 C macro values (e.g. headers=['fcntl.h'], macros=['O_CREAT', 'O_CLOEXEC']).""
+        """Evaluate exact Linux x86_64 C macro values (e.g. headers=['fcntl.h'], macros=['O_CREAT', 'O_CLOEXEC'])."""
         return eval_c_constants_impl(headers, macros)
     @mcp.tool()
     def probe_struct_abi(headers: List[str], struct_type: str, fields: List[str]) -> str:
         """Probe exact byte size and field offsets of a Linux C struct (e.g. struct stat, struct epoll_event)."""
         return probe_struct_abi_impl(headers, struct_type, fields)
 
-
-114 ---
     @mcp.tool()
     def search_uapi_headers(pattern: str, max_results: int = 30) -> str:
         """Search local/Zig-bundled Linux UAPI headers for a struct, typedef, or #define pattern."""
@@ -355,9 +341,6 @@ Add the following configuration to .antigravity/mcp.json so agents can autonomou
         "--mcp"
       ]
     }
-
-
-115 ---
   }
 }
 ```
@@ -370,12 +353,12 @@ Direct CLI command examples for terminal usage without MCP:
 ```
 ### Example 2: Query Exact Constant Values and Generate Zig Code
 ```bash
-./tools/tinux_abi_mcp.py constants -i fcntl.h -i sys/mman.h O_CREAT O_EXCL O_TRUNC O_APPEND O_CLOEXEC MAP_FIXED MAP_
+./tools/tinux_abi_mcp.py constants -i fcntl.h -i sys/mman.h O_CREAT O_EXCL O_TRUNC O_APPEND O_CLOEXEC MAP_FIXED MAP_ANONYMOUS
 ```
 ### Example 3: Inspect Struct Layouts and Comptime Assertions
 ```bash
 # Inspect struct stat (144 bytes)
-./tools/tinux_abi_mcp.py struct -i sys/stat.h "struct stat" st_dev st_ino st_nlink st_mode st_uid st_gid st_rdev st_
+./tools/tinux_abi_mcp.py struct -i sys/stat.h "struct stat" st_dev st_ino st_nlink st_mode st_uid st_gid st_rdev st_size st_blksize st_blocks
 # Inspect struct epoll_event (12 bytes packed on x86_64)
 ./tools/tinux_abi_mcp.py struct -i sys/epoll.h "struct epoll_event" events data
 ```

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 Tinux Linux x86_64 ABI & UAPI Inspector (FastMCP Server & CLI)
 Provides exact syscall numbers, macro constants, struct sizes/offsets,
@@ -58,9 +58,6 @@ def run_zig_c_probe(headers: List[str], probes: Dict[str, str]) -> Dict[str, Opt
     c_source = "\n".join(lines) + "\n"
     with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as tmp:
         tmp.write(c_source)
-
-
-111 ---
         tmp_path = tmp.name
     try:
         cmd = [
@@ -96,6 +93,8 @@ def run_zig_c_probe(headers: List[str], probes: Dict[str, str]) -> Dict[str, Opt
                 else:
                     results[key] = None
         return results
+    except (FileNotFoundError, OSError) as e:
+        raise RuntimeError(f"{e}") from e
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -131,9 +130,6 @@ def lookup_syscall_impl(query: str) -> str:
     else:
         for name, num in sorted(syscall_map.items(), key=lambda x: x[1]):
             if q in name.lower():
-
-
-112 ---
                 matches.append({"name": f"sys_{name}", "number": num, "macro": f"__NR_{name}"})
     output = {
         "architecture": "x86_64-linux",
@@ -156,7 +152,18 @@ def eval_c_constants_impl(headers: List[str], macros: List[str]) -> str:
     Evaluates exact C macro/constant values on x86_64-linux (hex, octal, decimal).
     """
     probes = {m: m for m in macros}
-    raw_vals = run_zig_c_probe(headers, probes)
+    try:
+        raw_vals = run_zig_c_probe(headers, probes)
+    except (FileNotFoundError, OSError, RuntimeError) as e:
+        return json.dumps(
+            {
+                "headers": headers,
+                "error": f"zig toolchain not found or probe failed: {e}",
+                "constants": {},
+                "zig_snippet": "",
+            },
+            indent=2,
+        )
     formatted = {}
     zig_lines = ["// Auto-generated Zig constants (x86_64-linux ABI)"]
     for m, val in raw_vals.items():
@@ -190,7 +197,20 @@ def probe_struct_abi_impl(headers: List[str], struct_type: str, fields: List[str
     for f in fields:
         probes[f"offset__{f}"] = f"offsetof({struct_type}, {f})"
         probes[f"size__{f}"] = f"sizeof((({struct_type} *)0)->{f})"
-    raw = run_zig_c_probe(headers, probes)
+    try:
+        raw = run_zig_c_probe(headers, probes)
+    except (FileNotFoundError, OSError, RuntimeError) as e:
+        return json.dumps(
+            {
+                "struct_type": struct_type,
+                "error": f"zig toolchain not found or probe failed: {e}",
+                "sizeof": None,
+                "alignof": None,
+                "fields": {},
+                "zig_comptime_assertions": "",
+            },
+            indent=2,
+        )
     total_size = raw.get("__sizeof__")
     align_size = raw.get("__alignof__")
     field_info = {}
@@ -204,9 +224,6 @@ def probe_struct_abi_impl(headers: List[str], struct_type: str, fields: List[str
         field_info[f] = {"offset": off, "size": sz}
         assert_lines.append(f'    std.debug.assert(@offsetOf(Self, "{f}") == {off});')
     assert_lines.append("}")
-
-
-113 ---
     return json.dumps(
         {
             "struct_type": struct_type,
@@ -221,8 +238,18 @@ def search_uapi_headers_impl(pattern: str, max_results: int = 30) -> str:
     """
     Searches Zig's bundled Linux UAPI / libc headers for a regex or identifier.
     """
+    try:
+        regex = re.compile(pattern)
+    except re.error as e:
+        return json.dumps(
+            {
+                "pattern": pattern,
+                "error": f"Invalid regular expression: {e}",
+                "hits": [],
+            },
+            indent=2,
+        )
     inc_dirs = get_zig_libc_include_dirs()
-    regex = re.compile(pattern)
     hits = []
     for base_dir in inc_dirs:
         for root, _, files in os.walk(base_dir):
@@ -268,15 +295,13 @@ def run_mcp_server() -> None:
         return lookup_syscall_impl(query)
     @mcp.tool()
     def eval_c_constants(headers: List[str], macros: List[str]) -> str:
-        """Evaluate exact Linux x86_64 C macro values (e.g. headers=['fcntl.h'], macros=['O_CREAT', 'O_CLOEXEC']).""
+        """Evaluate exact Linux x86_64 C macro values (e.g. headers=['fcntl.h'], macros=['O_CREAT', 'O_CLOEXEC'])."""
         return eval_c_constants_impl(headers, macros)
     @mcp.tool()
     def probe_struct_abi(headers: List[str], struct_type: str, fields: List[str]) -> str:
         """Probe exact byte size and field offsets of a Linux C struct (e.g. struct stat, struct epoll_event)."""
         return probe_struct_abi_impl(headers, struct_type, fields)
 
-
-114 ---
     @mcp.tool()
     def search_uapi_headers(pattern: str, max_results: int = 30) -> str:
         """Search local/Zig-bundled Linux UAPI headers for a struct, typedef, or #define pattern."""
@@ -286,41 +311,47 @@ def run_mcp_server() -> None:
 # Standalone CLI Entrypoint (Mode 2: Direct Bash Invocation)
 # ==============================================================================
 def main() -> None:
-    if "--mcp" in sys.argv:
-        run_mcp_server()
-        return
-    parser = argparse.ArgumentParser(
-        description="Tinux Linux x86_64 ABI & UAPI Inspector CLI / FastMCP Server"
-    )
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    # 1. syscall
-    p_sys = sub.add_parser("syscall", help="Look up syscall by name or number")
-    p_sys.add_argument("query", help="Syscall name (e.g. futex) or number (e.g. 202)")
-    # 2. constants
-    p_const = sub.add_parser("constants", help="Evaluate C macro constants")
-    p_const.add_argument(
-        "-i", "--include", action="append", required=True, help="Header file (e.g. fcntl.h)"
-    )
-    p_const.add_argument("macros", nargs="+", help="Macro names (e.g. O_CREAT O_TRUNC)")
-    # 3. struct
-    p_struct = sub.add_parser("struct", help="Probe C struct sizeof and field offsets")
-    p_struct.add_argument(
-        "-i", "--include", action="append", required=True, help="Header file (e.g. sys/stat.h)"
-    )
-    p_struct.add_argument("struct_type", help="Struct type (e.g. 'struct stat')")
-    p_struct.add_argument("fields", nargs="*", help="Field names (e.g. st_mode st_size)")
-    # 4. search
-    p_search = sub.add_parser("search", help="Search Linux UAPI headers by regex")
-    p_search.add_argument("pattern", help="Regex pattern to search")
-    p_search.add_argument("-n", "--max", type=int, default=30, help="Max results")
-    args = parser.parse_args()
-    if args.cmd == "syscall":
-        print(lookup_syscall_impl(args.query))
-    elif args.cmd == "constants":
-        print(eval_c_constants_impl(args.include, args.macros))
-    elif args.cmd == "struct":
-        print(probe_struct_abi_impl(args.include, args.struct_type, args.fields))
-    elif args.cmd == "search":
-        print(search_uapi_headers_impl(args.pattern, args.max))
+    try:
+        if "--mcp" in sys.argv:
+            run_mcp_server()
+            return
+        parser = argparse.ArgumentParser(
+            description="Tinux Linux x86_64 ABI & UAPI Inspector CLI / FastMCP Server"
+        )
+        sub = parser.add_subparsers(dest="cmd", required=True)
+        # 1. syscall
+        p_sys = sub.add_parser("syscall", help="Look up syscall by name or number")
+        p_sys.add_argument("query", help="Syscall name (e.g. futex) or number (e.g. 202)")
+        # 2. constants
+        p_const = sub.add_parser("constants", help="Evaluate C macro constants")
+        p_const.add_argument(
+            "-i", "--include", action="append", required=True, help="Header file (e.g. fcntl.h)"
+        )
+        p_const.add_argument("macros", nargs="+", help="Macro names (e.g. O_CREAT O_TRUNC)")
+        # 3. struct
+        p_struct = sub.add_parser("struct", help="Probe C struct sizeof and field offsets")
+        p_struct.add_argument(
+            "-i", "--include", action="append", required=True, help="Header file (e.g. sys/stat.h)"
+        )
+        p_struct.add_argument("struct_type", help="Struct type (e.g. 'struct stat')")
+        p_struct.add_argument("fields", nargs="*", help="Field names (e.g. st_mode st_size)")
+        # 4. search
+        p_search = sub.add_parser("search", help="Search Linux UAPI headers by regex")
+        p_search.add_argument("pattern", help="Regex pattern to search")
+        p_search.add_argument("-n", "--max", type=int, default=30, help="Max results")
+        args = parser.parse_args()
+        if args.cmd == "syscall":
+            print(lookup_syscall_impl(args.query))
+        elif args.cmd == "constants":
+            print(eval_c_constants_impl(args.include, args.macros))
+        elif args.cmd == "struct":
+            print(probe_struct_abi_impl(args.include, args.struct_type, args.fields))
+        elif args.cmd == "search":
+            print(search_uapi_headers_impl(args.pattern, args.max))
+    except SystemExit:
+        raise
+    except Exception as e:
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
 if __name__ == "__main__":
     main()

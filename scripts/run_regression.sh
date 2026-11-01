@@ -14,6 +14,13 @@ REPORT_FILE="REGRESSION_REPORT.md"
 KERNEL_BIN="zig-out/bin/tinux"
 TIMEOUT_SEC=12
 FORCE_STAGE=""
+PYTHON_BIN=""
+for cand in python python3 py; do
+    if "$cand" -c 'import sys' >/dev/null 2>&1; then
+        PYTHON_BIN="$cand"
+        break
+    fi
+done
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --stage|--target)
@@ -30,7 +37,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 now_ms() {
-    python3 -c 'import time; print(int(time.time() * 1000))'
+    if [[ -n "$PYTHON_BIN" ]]; then
+        "$PYTHON_BIN" -c 'import time; print(int(time.time() * 1000))'
+    else
+        echo 0
+    fi
 }
 detect_current_stage() {
     if [[ -n "$FORCE_STAGE" ]]; then
@@ -63,7 +74,7 @@ detect_current_stage() {
 CURRENT_STAGE_NUM=$(detect_current_stage)
 CURRENT_TASK_ID=$(printf "TASK-%03d" "$CURRENT_STAGE_NUM")
 echo -e "${BOLD}==============================================================================${NC}"
-echo -e "${BOLD}  Tinux Automated Regression Suite (20-Milestone Edition) — Stage: ${CYAN}${CURRENT_TASK_ID}${NC}"
+echo -e "${BOLD}  Tinux Automated Regression Suite (20-Milestone Edition): Stage: ${CYAN}${CURRENT_TASK_ID}${NC}"
 echo -e "${BOLD}==============================================================================${NC}"
 declare -a CHECK_IDS=()
 declare -a CHECK_NAMES=()
@@ -100,10 +111,8 @@ record_result() {
 # ------------------------------------------------------------------------------
 if [[ -f "scripts/check_license_guardrails.py" ]]; then
     echo -e "\n${BLUE}[Gate 0] Auditing clean-room boundaries and licensing integrity...${NC}"
-    if python -c "import sys" >/dev/null 2>&1; then
-        python scripts/check_license_guardrails.py || { echo -e "${RED}[FAIL]${NC} License guardrails violated."; exit 1; }
-    elif python3 -c "import sys" >/dev/null 2>&1; then
-        python3 scripts/check_license_guardrails.py || { echo -e "${RED}[FAIL]${NC} License guardrails violated."; exit 1; }
+    if [[ -n "$PYTHON_BIN" ]]; then
+        "$PYTHON_BIN" scripts/check_license_guardrails.py || { echo -e "${RED}[FAIL]${NC} License guardrails violated."; exit 1; }
     fi
     echo -e "${GREEN}[PASS]${NC} Clean-room boundaries and hybrid licensing verified."
 fi
@@ -129,22 +138,22 @@ else
     record_result "BUILD-ELF" "Zig freestanding kernel compilation" "FAIL" "$PRIMARY_MS" "zig-out/bin/tinux missing"
 fi
 T0=$(now_ms)
-if [[ -f "$KERNEL_BIN" ]] && python3 -c '
+if [[ -f "$KERNEL_BIN" ]] && [[ -n "$PYTHON_BIN" ]] && "$PYTHON_BIN" -c '
 import sys
 data = open(sys.argv[1], "rb").read()
 sys.exit(0 if b"Xen\x00" in data else 1)
 ' "$KERNEL_BIN" 2>/dev/null; then
     T1=$(now_ms)
-    record_result "BOOT-PVH" "Xen PVH ELF Note (XEN_ELFNOTE_PHYS32_ENTRY)" "PASS" "$((T1 - T0))" "Direct -kernel rea
+    record_result "BOOT-PVH" "Xen PVH ELF Note (XEN_ELFNOTE_PHYS32_ENTRY)" "PASS" "$((T1 - T0))" "Direct -kernel readiness"
 else
     T1=$(now_ms)
-    record_result "BOOT-PVH" "Xen PVH ELF Note (XEN_ELFNOTE_PHYS32_ENTRY)" "FAIL" "$((T1 - T0))" "Note missing in EL
+    record_result "BOOT-PVH" "Xen PVH ELF Note (XEN_ELFNOTE_PHYS32_ENTRY)" "FAIL" "$((T1 - T0))" "Note missing in ELF"
 fi
 T0=$(now_ms)
 COMPTIME_COUNT=$(grep -rn "@sizeOf(" src/ 2>/dev/null | wc -l | tr -d ' ')
 T1=$(now_ms)
 if (( COMPTIME_COUNT >= 1 )); then
-    record_result "ABI-ASSERT" "Compile-time Linux x86_64 ABI assertions" "PASS" "$((T1 - T0))" "${COMPTIME_COUNT} a
+    record_result "ABI-ASSERT" "Compile-time Linux x86_64 ABI assertions" "PASS" "$((T1 - T0))" "${COMPTIME_COUNT} assertions passed"
 else
     record_result "ABI-ASSERT" "Compile-time Linux x86_64 ABI assertions" "SKIP" "$((T1 - T0))" "Pre-TASK-002 stage"
 fi
@@ -157,14 +166,14 @@ if [[ -f "/tmp/tinux_reg_primary.log" ]]; then
     LOG_CONTENT=$(cat "/tmp/tinux_reg_primary.log")
 fi
 if echo "$LOG_CONTENT" | grep -qE "\[TINUX_PANIC\]|Unhandled Exception|Triple fault"; then
-    record_result "CPU-HEALTH" "Zero Kernel Panic / #PF / #GP / #DF exceptions" "FAIL" "0" "Exception detected in lo
+    record_result "CPU-HEALTH" "Zero Kernel Panic / #PF / #GP / #DF exceptions" "FAIL" "0" "Exception detected in log"
 else
     record_result "CPU-HEALTH" "Zero Kernel Panic / #PF / #GP / #DF exceptions" "PASS" "0" "Clean Ring 0/Ring 3 run"
 fi
 if [[ "$PRIMARY_RC" -eq 0 ]]; then
-    record_result "$CURRENT_TASK_ID" "Active milestone verification harness" "PASS" "$PRIMARY_MS" "Exit code 0 (QEMU
+    record_result "$CURRENT_TASK_ID" "Active milestone verification harness" "PASS" "$PRIMARY_MS" "Exit code 0 (QEMU passed)"
 else
-    record_result "$CURRENT_TASK_ID" "Active milestone verification harness" "FAIL" "$PRIMARY_MS" "verify_qemu.sh fa
+    record_result "$CURRENT_TASK_ID" "Active milestone verification harness" "FAIL" "$PRIMARY_MS" "verify_qemu.sh failed"
 fi
 # ------------------------------------------------------------------------------
 # Phase 3: Cumulative Subsystem Regression Matrix (TASK-001 .. TASK-020)
@@ -184,9 +193,9 @@ if (( CURRENT_STAGE_NUM >= 12 )) && [[ -f "$KERNEL_BIN" ]]; then
             truncate -s 1M "$MATRIX_DISK"
         else
             dd if=/dev/zero of="$MATRIX_DISK" bs=1M count=1 status=none
-            printf "[TINUX_DISK_SECTOR0] Host-provisioned VirtIO-Block image ready!\n" | dd of="$MATRIX_DISK" conv=n
+            printf "[TINUX_DISK_SECTOR0] Host-provisioned VirtIO-Block image ready!\n" | dd of="$MATRIX_DISK" conv=notrunc status=none
         fi
-        QEMU_EXTRA_ARGS+=(-drive "file=$MATRIX_DISK,format=raw,if=none,id=drv0" -device "virtio-blk-pci,drive=drv0,d
+        QEMU_EXTRA_ARGS+=(-drive "file=$MATRIX_DISK,format=raw,if=none,id=drv0" -device "virtio-blk-pci,drive=drv0,disable-legacy=off")
     fi
     if (( CURRENT_STAGE_NUM >= 17 )); then
         QEMU_EXTRA_ARGS+=(-netdev "user,id=net0" -device "virtio-net-pci,netdev=net0,disable-legacy=off")
@@ -308,7 +317,7 @@ check_milestone_feature 4  "SYSCALL/SYSRET MSRs & Ring 3 Transition"      "TINUX
 check_milestone_feature 5  "Static ELF64 Loader, Auxv, TLS & sys_brk"     "TINUX_ELF|TINUX_INIT"
 check_milestone_feature 6  "In-Memory VFS, CPIO Initramfs & BusyBox"      "Welcome to Tinux|TINUX_VFS"
 check_milestone_feature 7  "Multi-Process fork/execve/wait4 & /bin/sh"    "TINUX_SH|TINUX_INIT"
-check_milestone_feature 8  "IPC Pipes (pipe2), dup2 & /proc Pseudo-FS"    "Linux version 6\.12\.0-tinux|Welcome to T
+check_milestone_feature 8  "IPC Pipes (pipe2), dup2 & /proc Pseudo-FS"    "Linux version 6\.12\.0-tinux|Welcome to Tinux"
 check_milestone_feature 9  "Writable tmpfs, getdents64 & File Ops"        "hello\.txt|TMPFS_REGRESSION_PASS"
 check_milestone_feature 10 "PIT 100Hz Timer, nanosleep, /proc/pid & ps"   "PID|TINUX_PROC|TINUX_TIMER"
 check_milestone_feature 11 "Dynamic ELF Loader (PT_INTERP / ld-musl)"     "TINUX_DYN"
@@ -334,7 +343,7 @@ fi
     echo ""
     echo "* **Timestamp:** \`${TIMESTAMP}\`"
     echo "* **Detected Milestone Stage:** \`${CURRENT_TASK_ID}\`"
-    echo "* **Overall Verdict:** **${OVERALL_BADGE}** (\`${PASS_COUNT} Passed\`, \`${FAIL_COUNT} Failed\`, \`${SKIP_
+    echo "* **Overall Verdict:** **${OVERALL_BADGE}** (\`${PASS_COUNT} Passed\`, \`${FAIL_COUNT} Failed\`, \`${SKIP_COUNT} Skipped\`)"
     echo ""
     echo "## Results Matrix"
     echo ""
@@ -342,14 +351,14 @@ fi
     echo "| :--- | :--- | :---: | :---: | :--- |"
     for i in "${!CHECK_IDS[@]}"; do
         st="${CHECK_STATUS[$i]}"
-        icon=" ✅  PASS"
-        [[ "$st" == "FAIL" ]] && icon=" ❌  FAIL"
-        [[ "$st" == "SKIP" ]] && icon=" ⏭  SKIP"
-        echo "| \`${CHECK_IDS[$i]}\` | ${CHECK_NAMES[$i]} | ${icon} | \`${CHECK_TIMES[$i]}\` | ${CHECK_DETAILS[$i]} 
+        icon=" [PASS]"
+        [[ "$st" == "FAIL" ]] && icon=" [FAIL]"
+        [[ "$st" == "SKIP" ]] && icon=" [SKIP]"
+        echo "| \`${CHECK_IDS[$i]}\` | ${CHECK_NAMES[$i]} | ${icon} | \`${CHECK_TIMES[$i]}\` | ${CHECK_DETAILS[$i]} |"
     done
 } > "$REPORT_FILE"
 echo -e "\n${BOLD}==============================================================================${NC}"
-echo -e "  Regression Summary: ${GREEN}${PASS_COUNT} Passed${NC}, ${RED}${FAIL_COUNT} Failed${NC},${YELLOW}${SKIP_CO
+echo -e "  Regression Summary: ${GREEN}${PASS_COUNT} Passed${NC}, ${RED}${FAIL_COUNT} Failed${NC}, ${YELLOW}${SKIP_COUNT} Skipped${NC}"
 echo -e "  Markdown Report   : ${CYAN}${REPORT_FILE}${NC}"
 echo -e "${BOLD}==============================================================================${NC}"
 if (( FAIL_COUNT > 0 )); then

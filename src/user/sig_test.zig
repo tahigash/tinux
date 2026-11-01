@@ -45,8 +45,6 @@ inline fn syscall1(num: usize, a1: usize) isize {
     );
 }
 
-
-162 ---
 inline fn syscall2(num: usize, a1: usize, a2: usize) isize {
     return asm volatile ("syscall"
         : [ret] "={rax}" (-> isize),
@@ -115,9 +113,6 @@ export fn sigTestMain() callconv(.C) noreturn {
     if (syscall4(13, SIGALRM, @intFromPtr(&act), 0, 8) != 0) failExit(11);
     if (syscall4(13, SIGCHLD, @intFromPtr(&act), 0, 8) != 0) failExit(12);
     // 2. Test sigprocmask (SIG_BLOCK -> kill -> verify blocked -> SIG_UNBLOCK -> delivered!)
-
-
-163 ---
     var mask: u64 = (@as(u64, 1) << (SIGUSR1 - 1));
     if (syscall4(14, SIG_BLOCK, @intFromPtr(&mask), 0, 8) != 0) failExit(13);
     const pid = syscall0(39); // getpid

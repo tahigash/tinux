@@ -41,9 +41,6 @@ _start32:
     movl $0xC0000080, %ecx
     rdmsr
     orl  $0x00000100, %eax
-
-
-137 ---
     wrmsr
     /* 5. Enable Paging (PG=Bit 31), Write Protect (WP=Bit 16), FPU/SSE (MP=Bit 1, clear EM=Bit 2) in CR0 */
     movl %cr0, %eax

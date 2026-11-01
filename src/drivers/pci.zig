@@ -24,9 +24,6 @@ pub fn writeConfig32(bus: u8, slot: u8, func: u8, offset: u8, val: u32) void {
         (@as(u32, bus) << 16) |
         (@as(u32, slot) << 11) |
         (@as(u32, func) << 8) |
-
-
-95 ---
         (@as(u32, offset) & 0xFC);
     io.outl(CONFIG_ADDRESS, addr);
     io.outl(CONFIG_DATA, val);

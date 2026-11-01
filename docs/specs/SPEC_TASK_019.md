@@ -8,75 +8,74 @@
 ## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
 You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
- specification with definition `UdpHdr` （ 8 bytes ）、 IPv4 UDP 、 `Socket` of receive、
-2. **Dual-Path UDP Routing Discipline （ Loopback and VirtIO-Net of ⽴） :**
- `AF_INET` + `SOCK_DGRAM` socket 、 IP `127.x.x.x` （ or ⾃⾃⾝ `10.0.2.15` ） of when of 
-3. **Strict Zig Version Idioms （ Zig ⽂ of strictly adhere） :**
- must 1 of 「 Zig Idiom Cheat Sheet 」 、function ⼀use。
-4. **Compile-Time ABI & Protocol Header Assertions （ `comptime` of strictly adhere） :**
- 4 with `UdpHdr` （ 8B ） and `DnsHeader` （ 12B ） of `comptime` ‧ ‧
-5. **3-Strike Escalation Protocol （ 3 timeson failure of stop） :**
- * or `./scripts/verify_qemu.sh TASK-019 10` **3 timesconsecutive with ** when、 **4 times⽬ of speculativefix ⾏
- * 3 times⽬ of `./scripts/triage_crash.py --out ESCALATION_REPORT.md` execute、 7 of 
+   Implement the exact protocol definitions: `UdpHdr` (8 bytes), IPv4 UDP framing, `Socket` datagram queues, and direct datagram delivery.
+2. **Dual-Path UDP Routing Discipline (Loopback and VirtIO-Net Coexistence):**
+   For `AF_INET` + `SOCK_DGRAM` sockets, when the destination IP is `127.x.x.x` (or the local host IP `10.0.2.15`), route the datagram internally through loopback delivery without transmitting over VirtIO-Net. When the destination IP is external (such as `10.0.2.3`), route through VirtIO-Net TX via ARP resolution.
+3. **Strict Zig Version Idioms (Freestanding Kernel Standards):**
+   Adhere to Section 1 "Zig Idiom Cheat Sheet" and avoid deprecated language constructs.
+4. **Compile-Time ABI & Protocol Header Assertions:**
+   Enforce compile-time assertions for `UdpHdr` (8 bytes) and `DnsHeader` (12 bytes) using `comptime { std.debug.assert(@sizeOf(T) == N); }`.
+5. **3-Strike Escalation Protocol (Halt on 3rd Failure):**
+   * If compilation or `./scripts/verify_qemu.sh TASK-019 10` fails 3 consecutive times, halt speculative fixes.
+   * Run `./scripts/triage_crash.py --out ESCALATION_REPORT.md` and complete the Section 7 escalation report template.
 ---
-## 1. Zig Idiom Cheat Sheet (KernelFreestanding Rules)
+## 1. Zig Idiom Cheat Sheet (Kernel Freestanding Rules)
 | Operation | Deprecated (Prohibited) | Required (Modern Zig) |
 | :--- | :--- | :--- |
 | Pointer to integer | `@ptrToInt(ptr)` | `@intFromPtr(ptr)` |
 | Integer to pointer | `@intToPtr(*T, addr)` | `@as(*T, @ptrFromInt(addr))` |
-| Big Endian ↔ Host | ⼿ | `std.mem.bigToNative(u16, v)` / `std.mem.nativeToBig(u16, v)` |
-| ⾮ 16bit write | `@ptrCast(*u16, p).* = v` | `std.mem.writeInt(u16, @as(*[2]u8, @ptrFromInt(p)), v,.big)` 
-| ⾮ 32bit | `@ptrCast(*const u32, p).*` | `std.mem.readInt(u32, @as(*const [4]u8, @ptrFromInt(p)),.li
-| structverification | execute | `comptime { std.debug.assert(@sizeOf(T) == N); }` |
+| Big Endian <-> Host | Manual bit shift or bitcast | `std.mem.bigToNative(u16, v)` / `std.mem.nativeToBig(u16, v)` |
+| Unaligned 16-bit write | `@ptrCast(*u16, p).* = v` | `std.mem.writeInt(u16, @as(*[2]u8, @ptrFromInt(p)), v, .big)` |
+| Unaligned 32-bit read | `@ptrCast(*const u32, p).*` | `std.mem.readInt(u32, @as(*const [4]u8, @ptrFromInt(p)), .little)` |
+| Struct size verification | Runtime check | `comptime { std.debug.assert(@sizeOf(T) == N); }` |
 
 ---
 ## 2. Task Metadata & Scope
 * **Task ID:** `TASK-019`
-* **Title:** `UDP/IPv4 Socket Stack (SOCK_DGRAM Loopback & VirtIO-Net TX/RX), /proc/net/udp, and RFC 1035 DNS Resolv
+* **Title:** `UDP/IPv4 Socket Stack (SOCK_DGRAM Loopback & VirtIO-Net TX/RX), /proc/net/udp, and RFC 1035 DNS Resolver Verification (10.0.2.3:53)`
 * **Target Subsystem:** `net`, `fs`, `syscall`, `user`
 * **Target Files to Create / Modify:**
-  * `src/net/netstack.zig` (Modify: add `UdpHdr`, UDP TX/RX framing, ARP resolution for `10.0.2.3`, port demultiplex
-  * `src/net/socket.zig` (Modify: add UDP datagram queue with sender IP/port metadata, automatic ephemeral port bind
+  * `src/net/netstack.zig` (Modify: add `UdpHdr`, UDP TX/RX framing, ARP resolution for `10.0.2.3`, port demultiplexing, and offline DNS fallback)
+  * `src/net/socket.zig` (Modify: add UDP datagram queue with sender IP/port metadata, automatic ephemeral port binding, and datagram delivery)
   * `src/fs/procfs.zig` (Modify: dynamically generate `/proc/net/udp` showing bound UDP sockets)
   * `src/fs/vfs.zig` (Modify: register `/etc/resolv.conf` containing `nameserver 10.0.2.3\n` and `/etc/hosts`)
-  * `src/syscall/dispatch.zig` (Modify: extend `sys_bind`, `sys_connect`, `sys_sendto`, `sys_recvfrom`, `sys_read`, 
-  * `src/user/dns_test.zig` (Create: standalone Linux `x86_64` verification binary testing `/etc/resolv.conf` parsin
+  * `src/syscall/dispatch.zig` (Modify: extend `sys_bind`, `sys_connect`, `sys_sendto`, `sys_recvfrom`, `sys_read`, and `sys_write` for `SOCK_DGRAM`)
+  * `src/user/dns_test.zig` (Create: standalone Linux `x86_64` verification binary testing `/etc/resolv.conf` parsing, UDP loopback, and DNS resolution)
   * `src/main.zig` (Modify: update test markers to `TASK-019`)
-  * `scripts/verify_qemu.sh` (Modify: compile `/bin/dns_test`, package into `initramfs.cpio`, and execute via intera
+  * `scripts/verify_qemu.sh` (Modify: compile `/bin/dns_test`, package into `initramfs.cpio`, and execute via interactive shell)
 * **Read-Only Reference Files:**
   * `src/drivers/virtio_net.zig`
   * `src/proc/signal.zig`
 ---
 ## 3. Hardware, Protocol & Linux ABI Contract (Opus 5.5 Audited)
 ### 3.1 UDP/IPv4 Wire Protocol & Demultiplexing Contract
-QEMU of User-Mode Networking (`-netdev user`) with 、 `10.0.2.2` 、 `10.0.2.3` DNS （ UDP Port `5
+In QEMU user-mode networking (`-netdev user`), the gateway host is `10.0.2.2` and the virtual DNS server is `10.0.2.3` listening on UDP port `53`.
 | Header / Field | Byte Offset | Size | Format & Wire Behavior |
 | :--- | :--- | :--- | :--- |
-| **`Ipv4Hdr.proto`** | `9` | `1 B` (`u8`) | **`17` (`IPPROTO_UDP`)** 。  |
-| **`UdpHdr.src_port`** | `0` | `2 B` (`u16`) | transmitportnumber（ Big Endian ）。 of sockettransmitwhen
-| **`UdpHdr.dst_port`** | `2` | `2 B` (`u16`) | portnumber（ Big Endian 、 DNS `53` ）。 |
-| **`UdpHdr.len`** | `4` | `2 B` (`u16`) | UDP （ 8 bytes ）＋ UDP ⻑ of （ Big Endian ）。 |
-| **`UdpHdr.check`** | `6` | `2 B` (`u16`) | IPv4 UDP （ RFC 768 、transmit `0` ＝、 or 
+| **`Ipv4Hdr.proto`** | `9` | `1 B` (`u8`) | **`17` (`IPPROTO_UDP`)**. Identifies encapsulated UDP packet. |
+| **`UdpHdr.src_port`** | `0` | `2 B` (`u16`) | Source port number (Big Endian). Set to bound local port or ephemeral port. |
+| **`UdpHdr.dst_port`** | `2` | `2 B` (`u16`) | Destination port number (Big Endian; DNS server uses `53`). |
+| **`UdpHdr.len`** | `4` | `2 B` (`u16`) | UDP header (8 bytes) plus payload length in bytes (Big Endian). |
+| **`UdpHdr.check`** | `6` | `2 B` (`u16`) | Checksum over IPv4 pseudo-header and UDP datagram (RFC 768; set `0` to disable or calculate checksum). |
 * **UDP Port Demultiplexing (`netstack.onReceiveUdp`):**
- 1. `virtio_net.pollRx()` `EthHdr.ethertype == 0x0800` (IPv4) `Ipv4Hdr.proto == 17` (UDP) of frame receive
- 2. `socket.deliverUdpDatagram(ip_hdr.saddr, src_port, dst_port, udp_payload)` 、 `domain == AF_INET and so
- 3. socket with block of task（ `task.wakeSocketReadWaiters(sock_idx)` and `task.wakeEpollWaiters()` ） 
+  1. When `virtio_net.pollRx()` receives an Ethernet frame with `EthHdr.ethertype == 0x0800` (IPv4) and `Ipv4Hdr.proto == 17` (UDP):
+  2. Call `socket.deliverUdpDatagram(ip_hdr.saddr, src_port, dst_port, udp_payload)` to locate the active socket matching `domain == AF_INET and sock_type == SOCK_DGRAM and bound_port == dst_port`.
+  3. If matched, copy payload to datagram buffer, set `dgram_ready = true`, record source IP/port, and wake waiters (`task.wakeSocketReadWaiters(sock_idx)` and `task.wakeEpollWaiters()`).
 ### 3.2 Deterministic Offline-Safe DNS Resolution Contract (`10.0.2.3:53`)
-QEMU of SLIRP network 、 `10.0.2.3` ARP Request of **100% 
- with 、 ** DMA verification of and CI of 100% ⽴ ** 、 of implement：
-1. `dst_ip == 10.0.2.3` `dst_port == 53` to of UDP transmit：
- * must `resolveArp(.{ 10, 0, 2, 3 })` execute、 VirtIO-Net DMA with QEMU SLIRP from `10.0.2.3` of MAC 
- * MAC 、 UDP DNS frame `virtio_net.transmitFrame()` with DMA transmit（ `tx_pack
- * of 、 `virtio_net.pollRx()` ⼤ `20,000` timesring DNS from of response 。
- * from of responsewhen（ CI ）、transmit DNS of `Transaction ID` （first 2 ）
+In QEMU SLIRP networking, sending an ARP request for `10.0.2.3` may not always elicit an immediate hardware response or an external internet connection. To ensure deterministic DMA verification and 100% CI reproducibility across offline test environments:
+1. When transmitting UDP to `dst_ip == 10.0.2.3` on `dst_port == 53`:
+   * Execute `resolveArp(.{ 10, 0, 2, 3 })` to resolve MAC address via QEMU SLIRP.
+   * Transmit the UDP DNS frame via `virtio_net.transmitFrame()` using DMA (incrementing `tx_packets`).
+   * Poll for incoming responses with `virtio_net.pollRx()` in a loop up to 20,000 iterations.
+   * If no external DNS response arrives (such as in an offline CI sandbox), synthesize a valid RFC 1035 DNS response matching the transmitted query Transaction ID (first 2 bytes) with Answer count 1 returning `93.184.216.34` (or `10.0.2.3`), and deliver it via `socket.deliverUdpDatagram`.
 ### 3.3 Linux `SOCK_DGRAM` Socket Syscall Contract
 | Syscall Name | Num | Arguments | Exact Return Value & `-Errno` Edge Cases |
 | :--- | :--- | :--- | :--- |
-| **`sys_socket`** | `41` | `AF_INET(2), SOCK_DGRAM(2) \| flags, proto` | `proto == 0` or `proto == 17 (IPPROTO_U
-| **`sys_bind`** | `49` | `fd, addr_ptr, addrlen` | `SockAddrIn` from `port = bigToNative(u16, sin_port)` （ `po
-| **`sys_connect`** | `42` | `fd, addr_ptr, addrlen` | UDP socket（ `SOCK_DGRAM` ） `connect` 、 of 
-| **`sys_sendto`** | `44` | `fd, buf, len, flags, dest_addr, addrlen` | 1. socket `bound_port == 0` 
-| **`sys_recvfrom`** | `45` | `fd, buf, len, flags, src_addr, addrlen_ptr` | `virtio_net.pollRx()` 、socket
+| **`sys_socket`** | `41` | `AF_INET(2), SOCK_DGRAM(2) \| flags, proto` | If `proto == 0` or `proto == 17 (IPPROTO_UDP)`, allocate socket slot and initialize `sock_type = SOCK_DGRAM`, `domain = AF_INET`, `state = .UNBOUND`. Return fd. If invalid proto/type, return `-EINVAL` / `-EPROTONOSUPPORT`. |
+| **`sys_bind`** | `49` | `fd, addr_ptr, addrlen` | Read `SockAddrIn`, parse `port = bigToNative(u16, sin_port)`. If port already bound to another socket, return `-EADDRINUSE`. Otherwise set `bound_port = port`, `state = .BOUND`, return `0`. |
+| **`sys_connect`** | `42` | `fd, addr_ptr, addrlen` | For UDP sockets (`SOCK_DGRAM`), sets default peer address. Allocate ephemeral port if unbound. Record `peer_ip = addr_ip; s.peer_port = addr_port; s.state = .CONNECTED; return 0;`. |
+| **`sys_sendto`** | `44` | `fd, buf, len, flags, dest_addr, addrlen` | 1. If socket `bound_port == 0`, allocate ephemeral port. 2. If `dest_addr != 0`, parse target IP and port; if `dest_addr == 0`, use connected peer IP/port (return `-EDESTADDRREQ` if unconnected). 3. If destination is `127.x.x.x` or host IP, deliver via `deliverUdpDatagram`. Otherwise transmit via `netstack.sendUdpPacket`. Return bytes sent. |
+| **`sys_recvfrom`** | `45` | `fd, buf, len, flags, src_addr, addrlen_ptr` | Poll `virtio_net.pollRx()`. If datagram is ready, copy up to `len` bytes into `buf`, reset `dgram_ready = false`. If `src_addr != 0`, write `SockAddrIn` with sender IP/port. Return bytes read. If no datagram available, block task in `.WAITING_SOCK_READ` or return `-EAGAIN` if non-blocking. |
 ---
 ## 4. Exact Data Structures & Signatures
 ### 4.1 `src/net/netstack.zig` Additions
@@ -89,7 +88,6 @@ pub const UdpHdr = extern struct {
     comptime {
         std.debug.assert(@sizeOf(UdpHdr) == 8);
     }
-
 };
 pub const DNS_SERVER_IP: [4]u8 = .{ 10, 0, 2, 3 };
 pub const DNS_PORT: u16 = 53;
@@ -104,7 +102,7 @@ pub fn sendUdpPacket(
 }
 ```
 ### 4.2 `src/net/socket.zig` UDP Extensions
-`Socket` struct of add、 UDP of receive and boundary preserve with ：
+Add the following fields to `Socket` struct to preserve UDP datagram boundaries:
 ```zig
     peer_ip: [4]u8 = .{ 0, 0, 0, 0 },
     peer_port: u16 = 0,
@@ -113,7 +111,7 @@ pub fn sendUdpPacket(
     dgram_ready: bool = false,
     dgram_len: usize = 0,
 ```
-、 of function `src/net/socket.zig` add：
+Add the helper functions to `src/net/socket.zig`:
 ```zig
 pub fn ensureBoundPort(idx: usize) u16 {
     var s = &sockets[idx];
@@ -161,7 +159,6 @@ const SockAddrIn = extern struct {
     sin_family: u16 = AF_INET,
     sin_port: u16 = 0, // Big Endian
     sin_addr: [4]u8 = .{ 0, 0, 0, 0 },
-
     sin_zero: [8]u8 = [_]u8{0} ** 8,
     comptime {
         std.debug.assert(@sizeOf(SockAddrIn) == 16);
@@ -231,7 +228,6 @@ fn writeStdout(msg: []const u8) void {
 }
 fn failExit(code: usize) noreturn {
     _ = syscall1(231, code);
-
     unreachable;
 }
 export fn dnsTestMain() callconv(.C) noreturn {
@@ -254,13 +250,13 @@ export fn dnsTestMain() callconv(.C) noreturn {
     };
     if (syscall3(49, @intCast(lo_fd), @intFromPtr(&lo_addr), @sizeOf(SockAddrIn)) != 0) failExit(13);
     const lo_msg = "UDP_LOOPBACK_OK";
-    if (syscall6(44, @intCast(lo_fd), @intFromPtr(lo_msg.ptr), lo_msg.len, 0, @intFromPtr(&lo_addr), 16) != lo_msg.l
+    if (syscall6(44, @intCast(lo_fd), @intFromPtr(lo_msg.ptr), lo_msg.len, 0, @intFromPtr(&lo_addr), 16) != lo_msg.len) {
         failExit(14);
     }
     var lo_rx: [32]u8 = undefined;
     var lo_from: SockAddrIn = undefined;
     var lo_from_len: u32 = 16;
-    const lo_n = syscall6(45, @intCast(lo_fd), @intFromPtr(&lo_rx), lo_rx.len, 0, @intFromPtr(&lo_from), @intFromPtr
+    const lo_n = syscall6(45, @intCast(lo_fd), @intFromPtr(&lo_rx), lo_rx.len, 0, @intFromPtr(&lo_from), @intFromPtr(&lo_from_len));
     if (lo_n != lo_msg.len or lo_from.sin_port != std.mem.nativeToBig(u16, 5353)) failExit(15);
     writeStdout("[TINUX_UDP] Local UDP SOCK_DGRAM bind/sendto/recvfrom on 127.0.0.1:5353 verified!\n");
     // 3. Build RFC 1035 DNS A-Record Query for "example.com" -> 10.0.2.3:53
@@ -302,7 +298,6 @@ export fn dnsTestMain() callconv(.C) noreturn {
         0,
         @intFromPtr(&dns_from),
         @intFromPtr(&dns_from_len),
-
     );
     if (resp_len < 33) failExit(19);
     // Verify Transaction ID (0x42, 0x24), QR=1 (Response bit 0x80 in byte 2), and ANCOUNT >= 1
@@ -329,64 +324,64 @@ export fn dnsTestMain() callconv(.C) noreturn {
 ```
 ---
 ## 5. Step-by-Step Implementation Logic & State Transitions
-1. **Step 1: `src/fs/vfs.zig` and `src/fs/procfs.zig` of update **
- * `vfs.init()` with of network ：
+1. **Step 1: Update `src/fs/vfs.zig` and `src/fs/procfs.zig`**
+   * In `vfs.init()`, register the network configuration files:
      * `"etc/resolv.conf"` (`S_IFREG | 0o644`): `"nameserver 10.0.2.3\n"`
      * `"etc/hosts"` (`S_IFREG | 0o644`): `"127.0.0.1\tlocalhost\n10.0.2.15\ttinux\n"`
- * `procfs.syncProcessNodes()` with `socket.sockets` ⾛、 `in_use and domain == AF_INET and sock_type == SOCK_D
+   * In `procfs.syncProcessNodes()`, iterate over `socket.sockets` and format sockets matching `in_use and domain == AF_INET and sock_type == SOCK_DGRAM` into `/proc/net/udp`:
      ```text
-       sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer dr
+       sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops
         0: 0100007F:14E9 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 2001  2 00000000 0
      ```
-2. **Step 2: `src/net/netstack.zig` of UDP receive and DNS implement **
- * `onReceiveFrame(frame: []const u8)` of IPv4 （ `ethertype == 0x0800` ） ：
- * `ip_hdr.proto == IPPROTO_UDP (17)` of when：
- 1. `frame.len < 14 + 20 + 8` discarded。
-       2. `const udp_hdr = @as(*align(1) const UdpHdr, @ptrCast(frame.ptr + 34)).*;`
-       3. `const src_port = std.mem.bigToNative(u16, udp_hdr.src_port);`
-       4. `const dst_port = std.mem.bigToNative(u16, udp_hdr.dst_port);`
-       5. `const udp_len = std.mem.bigToNative(u16, udp_hdr.len);`
-       6. `if (udp_len < 8 or 34 + udp_len > frame.len) return;`
-       7. `const payload = frame[42 .. 34 + udp_len];`
-       8. `_ = socket.deliverUdpDatagram(ip_hdr.saddr, src_port, dst_port, payload);`
-   * `sendUdpPacket(src_port_host: u16, dst_ip: [4]u8, dst_port_host: u16, payload: []const u8) bool`:
- 1. MAC of ：⼀（ `dst_ip[0] == 10 and dst_ip[1] == 0 and dst_ip[2] == 2` ） `resolveArp(dst_
-     2. `EthHdr` (14B) + `Ipv4Hdr` (`tot_len = BE(20 + 8 + payload.len)`, `proto = 17`, `saddr = OUR_IP`, `daddr = d
-     3. `if (!virtio_net.transmitFrame(pkt_slice)) return false;`
- 4. `0..20_000` of loop with `virtio_net.pollRx()` 。
- 5. ** CI ⽤ :**
- `dst_ip` `10.0.2.3` `dst_port_host == 53` with 、ring `src_port_host` of socket 
- * `payload.len >= 12` verify、 of first 12 （ ID ） and Question （ `payload[12..]` ） 
-          * `resp[2] = 0x81; resp[3] = 0x80;` (`QR=1, RD=1, RA=1, RCODE=0`)
-          * `resp[6] = 0x00; resp[7] = 0x01;` (`ANCOUNT = 1`)
- * Question of 16 of Answer RR （ `0xC0, 0x0C` Name ptr, `0x00, 0x01` Type A, `0x00, 0x01`
-     6. `return true;`
-3. **Step 3: `src/syscall/dispatch.zig` of `SOCK_DGRAM` **
- * `sysBind` (49): `s.sock_type == SOCK_DGRAM` of when `s.bound_port = port; s.state =.BOUND;` 。
- * `sysConnect` (42): `s.sock_type == SOCK_DGRAM` of when、 ` _ = socket.ensureBoundPort(sock_idx); s.peer_ip = addr_
- * `sysSendto` (44) and `.SOCKET` `sysWrite` (1):
- * `s.sock_type == SOCK_DGRAM` of when：
-       1. `const local_port = socket.ensureBoundPort(sock_idx);`
- 2. `dest_addr != 0` `SockAddrIn` from `dst_ip, dst_port` 、 `dest_addr == 0` `s.peer_ip, s.pee
-
- 3. `if (dst_ip[0] == 127 or std.mem.eql(u8, &dst_ip, &netstack.OUR_IP))` `_ = socket.deliverUdpDatagram(d
- 4. `_ = netstack.sendUdpPacket(local_port, dst_ip, dst_port, slice);` 。
-       5. `return @intCast(slice.len);`
- * `sysRecvfrom` (45) and `.SOCKET` `sysRead` (0):
- * `s.sock_type == SOCK_DGRAM` of when：
-       1. `virtio_net.pollRx();`
-       2. `if (s.dgram_ready)`:
-          * `const n = @min(len, s.dgram_len);`
+2. **Step 2: Implement UDP framing, reception, and DNS handling in `src/net/netstack.zig`**
+   * In `onReceiveFrame(frame: []const u8)`, when an IPv4 packet (`ethertype == 0x0800`) is received:
+     * If `ip_hdr.proto == IPPROTO_UDP (17)`:
+       1. If `frame.len < 14 + 20 + 8`, discard packet.
+       2. Parse header: `const udp_hdr = @as(*align(1) const UdpHdr, @ptrCast(frame.ptr + 34)).*;`
+       3. Extract ports: `const src_port = std.mem.bigToNative(u16, udp_hdr.src_port);`
+       4. Extract destination: `const dst_port = std.mem.bigToNative(u16, udp_hdr.dst_port);`
+       5. Extract length: `const udp_len = std.mem.bigToNative(u16, udp_hdr.len);`
+       6. Validate bounds: `if (udp_len < 8 or 34 + udp_len > frame.len) return;`
+       7. Extract payload: `const payload = frame[42 .. 34 + udp_len];`
+       8. Deliver datagram: `_ = socket.deliverUdpDatagram(ip_hdr.saddr, src_port, dst_port, payload);`
+   * Implement `sendUdpPacket(src_port_host: u16, dst_ip: [4]u8, dst_port_host: u16, payload: []const u8) bool`:
+     1. Resolve destination MAC: if `dst_ip[0] == 10 and dst_ip[1] == 0 and dst_ip[2] == 2`, resolve via `resolveArp(dst_ip)`.
+     2. Construct frame: `EthHdr` (14B) + `Ipv4Hdr` (`tot_len = BE(20 + 8 + payload.len)`, `proto = 17`, `saddr = OUR_IP`, `daddr = dst_ip`) + `UdpHdr` + payload.
+     3. Transmit frame: `if (!virtio_net.transmitFrame(pkt_slice)) return false;`
+     4. Poll for responses: run a loop from `0..20_000` calling `virtio_net.pollRx()`.
+     5. CI offline fallback:
+        If `dst_ip == 10.0.2.3` and `dst_port_host == 53`, and the polling loop finishes without receiving a response for `src_port_host`:
+        * Validate query length: `payload.len >= 12`.
+        * Build synthetic response: copy query header, set `resp[2] = 0x81; resp[3] = 0x80;` (`QR=1, RD=1, RA=1, RCODE=0`), set `resp[6] = 0x00; resp[7] = 0x01;` (`ANCOUNT = 1`).
+        * Copy Question section, followed by a 16-byte Answer RR (`0xC0, 0x0C` Name pointer, `0x00, 0x01` Type A, `0x00, 0x01` Class IN, `0x00, 0x00, 0x00, 0x3C` TTL 60, `0x00, 0x04` RDLENGTH 4, `93, 184, 216, 34` IP).
+        * Deliver synthetic response directly via `socket.deliverUdpDatagram(dst_ip, dst_port_host, src_port_host, synthetic_resp)`.
+     6. Return `true`.
+3. **Step 3: Implement `SOCK_DGRAM` handling in `src/syscall/dispatch.zig`**
+   * `sysBind` (49): When `s.sock_type == SOCK_DGRAM`, set `s.bound_port = port; s.state = .BOUND;`.
+   * `sysConnect` (42): When `s.sock_type == SOCK_DGRAM`, ensure a local ephemeral port is assigned via `_ = socket.ensureBoundPort(sock_idx);` record peer address via `s.peer_ip = addr_ip; s.peer_port = addr_port; s.state = .CONNECTED; return 0;`.
+   * `sysSendto` (44) and `.SOCKET` `sysWrite` (1):
+     When `s.sock_type == SOCK_DGRAM`:
+     1. Assign local port: `const local_port = socket.ensureBoundPort(sock_idx);`
+     2. Determine destination: if `dest_addr != 0`, parse `SockAddrIn`; if `dest_addr == 0`, use `s.peer_ip, s.peer_port`. If destination unset, return `-EDESTADDRREQ`.
+     3. If `dst_ip[0] == 127 or std.mem.eql(u8, &dst_ip, &netstack.OUR_IP)`, deliver locally: `_ = socket.deliverUdpDatagram(dst_ip, local_port, dst_port, slice);`
+     4. Otherwise transmit via network: `_ = netstack.sendUdpPacket(local_port, dst_ip, dst_port, slice);`
+     5. Return `@intCast(slice.len)`.
+   * `sysRecvfrom` (45) and `.SOCKET` `sysRead` (0):
+     When `s.sock_type == SOCK_DGRAM`:
+     1. Poll RX queue: `virtio_net.pollRx();`
+     2. Check for ready datagram:
+        * If `s.dgram_ready`:
+          * Copy payload: `const n = @min(len, s.dgram_len);`
           * `@memcpy(user_buf[0..n], s.rx_buf[0..n]);`
-          * `s.dgram_ready = false; s.rx_count = 0;`
- * `if (src_addr_ptr != 0 and addrlen_ptr != 0)` `SockAddrIn{.sin_family = 2,.sin_port = std.mem.nati
-          * `frame.rax = n; return frame;`
- 3. `frame.user_rip -= 2; frame.rax = orig_syscall_num; cur.state =.WAITING_SOCK_READ; cur.wait_soc
-4. **Step 4: `src/main.zig` and `scripts/verify_qemu.sh` of update **
- * `src/main.zig` of start `[TINUX_TEST] START: TASK-019\n` 、 PASS `[TINUX_TEST] PASS: TASK-019\n` 
- * `scripts/verify_qemu.sh` with ：
-     1. `zig build-exe src/user/dns_test.zig -target x86_64-linux-none -O ReleaseSmall -fno-pie -femit-bin=.cache/in
- 2. type（ `/bin/sh` ） to of column ⼊：
+          * Reset state: `s.dgram_ready = false; s.rx_count = 0;`
+          * If `src_addr_ptr != 0 and addrlen_ptr != 0`, populate `SockAddrIn` with `s.last_rx_ip` and `s.last_rx_port`.
+          * Return bytes read: `frame.rax = n; return frame;`
+     3. If no datagram available: set `cur.state = .WAITING_SOCK_READ; cur.wait_sock_idx = sock_idx; frame.user_rip -= 2; frame.rax = orig_syscall_num; return frame;`.
+4. **Step 4: Update `src/main.zig` and `scripts/verify_qemu.sh`**
+   * In `src/main.zig`, update test start marker to `[TINUX_TEST] START: TASK-019\n` and pass marker to `[TINUX_TEST] PASS: TASK-019\n`.
+   * In `scripts/verify_qemu.sh`:
+     1. Build test binary: `zig build-exe src/user/dns_test.zig -target x86_64-linux-none -O ReleaseSmall -fno-pie -femit-bin=.cache/initramfs/bin/dns_test`.
+     2. Insert test execution sequence into shell script:
         ```sh
         echo "[TINUX_SH] Running UDP socket & RFC 1035 DNS resolver test suite..."
         /bin/dns_test
@@ -425,24 +420,23 @@ IP address       HW type     Flags       HW address            Mask     Device
 ```
 ---
 ## 7. Escalation Report Template (On 3rd Consecutive Failure)
-3 timesconsecutive with or `./scripts/verify_qemu.sh TASK-019 10` when、 Builder fixloop stop、 `./script
+If compilation or `./scripts/verify_qemu.sh TASK-019 10` fails 3 consecutive times, stop the fix loop, execute `./scripts/triage_crash.py --out ESCALATION_REPORT.md`, and record the failure details below:
 ```markdown
 # Escalation Report: TASK-019
 ## 1. Failure Summary
-* **Failed Stage:** [zig build / /etc/resolv.conf Missing / UDP Loopback Port Mismatch / ARP 10.0.2.3 Timeout / DNS 
+* **Failed Stage:** [zig build / /etc/resolv.conf Missing / UDP Loopback Port Mismatch / ARP 10.0.2.3 Timeout / DNS Resolution Timeout]
 * **UDP Socket & ARP State Dump:** [Active UDP sockets (bound_port, peer_port, dgram_ready), arp_table entries]
 * **Attempt History:**
   * Attempt 1: [Changes attempted and observed outcome]
   * Attempt 2: [Changes attempted and observed outcome]
-
   * Attempt 3: [Changes attempted and observed outcome]
 ## 2. Automated Crash Triage & Serial Log Output
 ```text
-[scripts/triage_crash.py of output and /tmp/tinux_qemu_TASK-019.log of ⽂ ]
+[Output from scripts/triage_crash.py and serial log lines from /tmp/tinux_qemu_TASK-019.log]
 ```
 ## 3. Current Code Diff
 ```diff
-[Relevant code diff for src/net/netstack.zig, src/net/socket.zig, src/syscall/dispatch.zig ]
+[Relevant code diff for src/net/netstack.zig, src/net/socket.zig, src/syscall/dispatch.zig]
 ```
 ## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]

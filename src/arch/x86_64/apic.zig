@@ -47,9 +47,6 @@ pub fn getIoapicRedirCount() u32 {
     return ioapic_max_entries;
 }
 pub export fn apMain() callconv(.C) noreturn {
-
-
-176 ---
     // Builder implements AP 64-bit initialization, LAPIC enable, and atomic handshake
 }
 pub fn initAndBootSmp(target_cpus: usize) usize {

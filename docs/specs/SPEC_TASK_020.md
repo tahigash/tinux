@@ -8,41 +8,40 @@
 ## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
 You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
- specification with definition Local APIC (`0xFEE0_0000`) / IOAPIC (`0xFEC0_0000`) of MMIO 、 AP placed
-2. **MMIO Cache-Disable & User PML4 Sharing Discipline （ MMIO shared of strictly adhere） :**
- Local APIC (`0xFEE0_0000`) and IOAPIC (`0xFEC0_0000`) 3..4 GiB region（ `pdptIndex == 3` ） 。must `PTE_PRESE
-3. **Relocation-Free 16-Bit AP Trampoline （placed of strictly adhere） :**
- `src/arch/x86_64/ap_trampoline.S` with 、 of 64-bit placed complete 、 4.1 with definition
-4. **Strict Zig Version Idioms （ Zig ⽂ of strictly adhere） :**
- must 1 of 「 Zig Idiom Cheat Sheet 」 、function ⼀use。
-5. **3-Strike Escalation Protocol （ 3 timeson failure of stop） :**
- * or `./scripts/verify_qemu.sh TASK-020 10` **3 timesconsecutive with ** when、 **4 times⽬ of speculativefix ⾏
- * 3 times⽬ of `./scripts/triage_crash.py --out ESCALATION_REPORT.md` execute、 7 of 
+   Implement the Local APIC (`0xFEE0_0000`) and IOAPIC (`0xFEC0_0000`) MMIO drivers, the 16-bit real mode AP trampoline at `0x0000_8000`, and the INIT-SIPI-SIPI wake protocol exactly as specified.
+2. **MMIO Cache-Disable & User PML4 Sharing Discipline:**
+   Local APIC (`0xFEE0_0000`) and IOAPIC (`0xFEC0_0000`) reside in the 3..4 GiB range (`pdptIndex == 3`). Map them with `PTE_PRESENT | PTE_WRITABLE | PTE_CACHE_DISABLE`. When cloning user page tables in `vmm.cloneKernelPml4()`, share `pdpt.entries[3]` so user Ring 3 syscall handlers can access APIC registers without page faults.
+3. **Relocation-Free 16-Bit AP Trampoline:**
+   `src/arch/x86_64/ap_trampoline.S` must be relocation-free. It transitions APs from 16-bit Real Mode to 32-bit Protected Mode, then to 64-bit Long Mode using mailbox parameters defined in Section 3.2.
+4. **Strict Zig Version Idioms:**
+   Adhere to Section 1 "Zig Idiom Cheat Sheet" and avoid deprecated language constructs.
+5. **3-Strike Escalation Protocol (Halt on 3rd Failure):**
+   * If compilation or `./scripts/verify_qemu.sh TASK-020 10` fails 3 consecutive times, halt speculative fixes.
+   * Run `./scripts/triage_crash.py --out ESCALATION_REPORT.md` and complete the Section 7 escalation report template.
 ---
-## 1. Zig Idiom Cheat Sheet (KernelFreestanding Rules)
+## 1. Zig Idiom Cheat Sheet (Kernel Freestanding Rules)
 | Operation | Deprecated (Prohibited) | Required (Modern Zig) |
 | :--- | :--- | :--- |
 | Pointer to integer | `@ptrToInt(ptr)` | `@intFromPtr(ptr)` |
 | Integer to pointer | `@intToPtr(*T, addr)` | `@as(*T, @ptrFromInt(addr))` |
-| MMIO 32bit | of referenced（ with ） | `@as(*volatile u32, @ptrFromInt(mmio_addr)).*` |
-| MMIO 32bit write | of ⼊（） | `@as(*volatile u32, @ptrFromInt(mmio_addr)).* = val;` |
-| | ⾮ with of waitingloop | `@atomicLoad(u32, ptr,.seq_cst)` / `@atomicStore` |
-| memory | with of write | `asm volatile ("mfence" ::: "memory");` |
+| MMIO 32-bit read | Direct pointer dereference without volatile | `@as(*volatile u32, @ptrFromInt(mmio_addr)).*` |
+| MMIO 32-bit write | Direct assignment without volatile | `@as(*volatile u32, @ptrFromInt(mmio_addr)).* = val;` |
+| Atomic load / store | Busy-wait loops without atomics | `@atomicLoad(u32, ptr, .seq_cst)` / `@atomicStore` |
+| Memory barrier | Unordered writes | `asm volatile ("mfence" ::: "memory");` |
 ---
 ## 2. Task Metadata & Scope
 * **Task ID:** `TASK-020`
-* **Title:** `Local APIC / IOAPIC Initialization, SMP Multi-Core (Application Processor) Boot via INIT-SIPI-SIPI Pro
+* **Title:** `Local APIC / IOAPIC Initialization, SMP Multi-Core (Application Processor) Boot via INIT-SIPI-SIPI Protocol, and Multi-Core /proc/cpuinfo`
 * **Target Subsystem:** `arch/x86_64`, `mm`, `fs`, `syscall`, `user`
-
 * **Target Files to Create / Modify:**
   * `build.zig` (Modify: add `src/arch/x86_64/ap_trampoline.S`)
-  * `src/arch/x86_64/ap_trampoline.S` (Create: 16-bit Real Mode -> 32-bit Protected Mode -> 64-bit Long Mode AP star
-  * `src/arch/x86_64/apic.zig` (Create: Local APIC & IOAPIC MMIO driver, `INIT-SIPI-SIPI` SMP boot controller, and `
+  * `src/arch/x86_64/ap_trampoline.S` (Create: 16-bit Real Mode -> 32-bit Protected Mode -> 64-bit Long Mode AP startup trampoline)
+  * `src/arch/x86_64/apic.zig` (Create: Local APIC & IOAPIC MMIO driver, `INIT-SIPI-SIPI` SMP boot controller, and AP mailbox protocol)
   * `src/arch/x86_64/idt.zig` (Modify: add `loadIdtOnAp()` helper to load `idtr` on Application Processors)
-  * `src/mm/vmm.zig` (Modify: map `0xFEC0_0000` and `0xFEE0_0000` in `vmm.init()`, and share `pdpt.entries[3]` in `c
-  * `src/fs/procfs.zig` (Modify: dynamically generate multi-core `/proc/cpuinfo` and per-core `/proc/stat` based on 
-  * `src/syscall/dispatch.zig` (Modify: implement `sys_sched_getaffinity(204)`, `sys_sched_setaffinity(203)`, `sys_g
-  * `src/user/smp_test.zig` (Create: standalone Linux `x86_64` SMP verification binary testing `sched_getaffinity`, 
+  * `src/mm/vmm.zig` (Modify: map `0xFEC0_0000` and `0xFEE0_0000` in `vmm.init()`, and share `pdpt.entries[3]` in `cloneKernelPml4()`)
+  * `src/fs/procfs.zig` (Modify: dynamically generate multi-core `/proc/cpuinfo` and per-core `/proc/stat` based on online CPU count)
+  * `src/syscall/dispatch.zig` (Modify: implement `sys_sched_getaffinity(204)`, `sys_sched_setaffinity(203)`, `sys_getcpu(309)`, and `sys_sched_yield(24)`)
+  * `src/user/smp_test.zig` (Create: standalone Linux `x86_64` SMP verification binary testing `sched_getaffinity`, `getcpu`, and multi-core `/proc/cpuinfo`)
   * `src/main.zig` (Modify: call `apic.initAndBootSmp(2)` and update test markers to `TASK-020`)
   * `scripts/verify_qemu.sh` (Modify: pass `-smp 2` to QEMU, compile `/bin/smp_test`, and verify 2-core SMP boot)
 * **Read-Only Reference Files:**
@@ -53,37 +52,37 @@ You are the **Implementation Builder**. Implement the requirements adhering stri
 ### 3.1 Local APIC (`0xFEE0_0000`) & IOAPIC (`0xFEC0_0000`) MMIO Contract
 | Register / Port / Field | Address / Offset | Width | Access | Exact Hardware / Protocol Behavior |
 | :--- | :--- | :--- | :--- | :--- |
-| **`IA32_APIC_BASE` MSR** | MSR `0x0000_001B` | `u64` | `RW` | Bit 11 (`0x800`: APIC Global Enable) `1` 。 B
-| **`LAPIC_ID`** | `0xFEE0_0020` | `u32` | `RO` | Bits `31..24` (`val >> 24`) of CPU of Local APIC ID (`0` =
-| **`LAPIC_VER`** | `0xFEE0_0030` | `u32` | `RO` | Bits `7..0` （ `0x14` ）、 Bits `23..16` ⼤ LVT 
-| **`LAPIC_TPR`** | `0xFEE0_0080` | `u32` | `RW` | Task Priority Register 。 `0x0000_0000` with of interrupt
-| **`LAPIC_EOI`** | `0xFEE0_00B0` | `u32` | `WO` | `0x0000_0000` with Local APIC interrupt of EOI notified。
-| **`LAPIC_SVR`** | `0xFEE0_00F0` | `u32` | `RW` | Spurious Interrupt Vector Register 。 **`0x0000_01FF`** （ Bit 8 APIC 
-| **`LAPIC_ICR_LOW`** | `0xFEE0_0300` | `u32` | `RW` | write IPI transmit。 Bit 12 (`1 << 12`) `0` 
-| **`LAPIC_ICR_HIGH`** | `0xFEE0_0310` | `u32` | `RW` | Bits `31..24` transmit APIC ID （ `@as(u32, target_apic_id) << 
-| **`IOAPIC_REGSEL` / `WIN`** | `0xFEC0_0000` / `+0x10` | `u32` | `RW` | `0xFEC0_0000` registernumber `0x01` (`IOAPICV
+| **`IA32_APIC_BASE` MSR** | MSR `0x0000_001B` | `u64` | `RW` | Bit 11 (`0x800`: APIC Global Enable) must be set to `1`. Bits 35..12 hold APIC base physical address (`0xFEE0_0000`). |
+| **`LAPIC_ID`** | `0xFEE0_0020` | `u32` | `RO` | Bits `31..24` (`val >> 24`) contain Local APIC ID (`0` = BSP, `1` = AP1). |
+| **`LAPIC_VER`** | `0xFEE0_0030` | `u32` | `RO` | Bits `7..0` APIC version (`0x14`), Bits `23..16` maximum LVT entries. |
+| **`LAPIC_TPR`** | `0xFEE0_0080` | `u32` | `RW` | Task Priority Register. Set to `0x0000_0000` to unmask all interrupt priorities. |
+| **`LAPIC_EOI`** | `0xFEE0_00B0` | `u32` | `WO` | Write `0x0000_0000` to signal End Of Interrupt to Local APIC. |
+| **`LAPIC_SVR`** | `0xFEE0_00F0` | `u32` | `RW` | Spurious Interrupt Vector Register. Set to `0x0000_01FF` (Bit 8 APIC software enable set to 1, spurious vector set to 0xFF). |
+| **`LAPIC_ICR_LOW`** | `0xFEE0_0300` | `u32` | `RW` | Writing initiates IPI transmission. Bit 12 (`1 << 12` delivery status) must be `0` (idle) before transmitting. |
+| **`LAPIC_ICR_HIGH`** | `0xFEE0_0310` | `u32` | `RW` | Bits `31..24` target APIC ID (`@as(u32, target_apic_id) << 24`). Bits 23..0 reserved. |
+| **`IOAPIC_REGSEL` / `WIN`** | `0xFEC0_0000` / `+0x10` | `u32` | `RW` | Select register by writing index to `0xFEC0_0000`, then read/write data at `0xFEC0_0010`. Register `0x01` (`IOAPICVER`): Bits 23..16 contain maximum redirection entries minus 1. |
 ### 3.2 AP Trampoline (`0x0000_8000`) & Mailbox (`0x0000_8F00`) Layout Contract
-BSP `SIPI` （ Startup IPI, Vector `0x08` ） transmit and 、 AP （ Application Processor ） 16-bit Real Mode （ `CS 
+When the BSP issues a Startup IPI (`SIPI`, Vector `0x08`), the AP starts executing in 16-bit Real Mode at address `0x0800:0000` (`0x0000_8000`). The mailbox page at `0x0000_8F00` coordinates initialization between BSP and AP.
 | Region / Mailbox Slot | Physical / Virtual Address | Size & Type | Usage & Lifetime |
 | :--- | :--- | :--- | :--- |
-| **AP Trampoline Code** | `0x0000_8000.. 0x0000_81FF` | `<= 512 B` | `ap_trampoline_start.. ap_trampoline_end` 
-| **`MAILBOX_CR3`** | `0x0000_8F00` | `u64` (8B) | BSP `vmm.getKernelPml4Phys()` 。 AP 32-bit with 
-| **`MAILBOX_RSP`** | `0x0000_8F08` | `u64` (8B) | BSP AP ⽤ 16 KiB stack of （ 16 
-| **`MAILBOX_ENTRY`** | `0x0000_8F10` | `u64` (8B) | 64-bit AP `call *%rax` with Zig function `@
-| **`MAILBOX_READY`** | `0x0000_8F18` | `u32` (4B) | BSP `0` cleared、 AP `apMain` with initialized `
-| **`MAILBOX_CPU_ID`** | `0x0000_8F1C` | `u32` (4B) | AP ⾃⾝ of `readLapicId()` verify⽤。 |
+| **AP Trampoline Code** | `0x0000_8000.. 0x0000_81FF` | `<= 512 B` | Binary image copied from `ap_trampoline_start` to `ap_trampoline_end`. Executed once per AP. |
+| **`MAILBOX_CR3`** | `0x0000_8F00` | `u64` (8B) | Physical address of Kernel PML4 (`vmm.getKernelPml4Phys()`). Loaded into `%cr3` during 32-bit mode transition. |
+| **`MAILBOX_RSP`** | `0x0000_8F08` | `u64` (8B) | Top of 16 KiB per-AP kernel stack allocated by BSP (16-byte aligned). Loaded into `%rsp` upon entering Long Mode. |
+| **`MAILBOX_ENTRY`** | `0x0000_8F10` | `u64` (8B) | 64-bit entry point address calling Zig `apMain` (`call *%rax`). |
+| **`MAILBOX_READY`** | `0x0000_8F18` | `u32` (4B) | Cleared to `0` by BSP before waking AP; set to `1` by AP in `apMain` to acknowledge successful boot. |
+| **`MAILBOX_CPU_ID`** | `0x0000_8F1C` | `u32` (4B) | AP writes its `readLapicId()` here to verify identity. |
 ### 3.3 Linux x86_64 SMP System Calls & `/proc/cpuinfo` Contract
 | Syscall / File | Number / Path | Arguments / Format | Exact Return Value & `-Errno` Edge Cases |
 | :--- | :--- | :--- | :--- |
-| **`sys_sched_yield`** | `24` | (none) | of 、 `0` 。 |
-| **`sys_sched_setaffinity`**| `203` | `pid, cpusetsize, mask_ptr` | `mask_ptr` verification、 `0` (Success) 。 |
-| **`sys_sched_getaffinity`**| `204` | `pid, cpusetsize, mask_ptr` | `cpusetsize < 8` `-EINVAL (-22)` 。 `validate
-| **`sys_getcpu`** | `309` | `cpu_ptr, node_ptr, tcache` | `cpu_ptr != 0` of `apic.readLapicId()` (`u32`) 
-| **`/proc/cpuinfo`** | `/proc/cpuinfo` | Text Pseudo-File | `0.. apic.getOnlineCpuCount()` of `i` 、 `p
+| **`sys_sched_yield`** | `24` | (none) | Cooperative CPU yield. Return `0`. |
+| **`sys_sched_setaffinity`**| `203` | `pid, cpusetsize, mask_ptr` | Validate user pointer `mask_ptr`, return `0` (Success). |
+| **`sys_sched_getaffinity`**| `204` | `pid, cpusetsize, mask_ptr` | If `cpusetsize < 8`, return `-EINVAL (-22)`. Validate `mask_ptr`. Write active CPU bitmask `(@as(u64, 1) << apic.getOnlineCpuCount()) - 1` (for 2 CPUs: `0x03`). Return `8` (bytes written). |
+| **`sys_getcpu`** | `309` | `cpu_ptr, node_ptr, tcache` | If `cpu_ptr != 0`, write current APIC ID (`u32`). If `node_ptr != 0`, write NUMA node `0` (`u32`). Return `0`. |
+| **`/proc/cpuinfo`** | `/proc/cpuinfo` | Text Pseudo-File | Iterate `0..apic.getOnlineCpuCount()`, output block for each processor with `processor : {d}`, `vendor_id : TinuxZig`, `model name : Tinux Virtual SMP x86_64 CPU`, `cpu MHz : 3000.000`, `apicid : {d}`. |
 ---
 ## 4. Exact Data Structures & Signatures
 ### 4.1 `src/arch/x86_64/ap_trampoline.S`
-Builder of `src/arch/x86_64/ap_trampoline.S` and of create、 `build.zig` `exe.addAssemblyFile(b
+Create `src/arch/x86_64/ap_trampoline.S` and add it to `build.zig` via `exe.addAssemblyFile(b.path("src/arch/x86_64/ap_trampoline.S"))`:
 ```asm
 .section .text
 .code16
@@ -223,7 +222,6 @@ pub fn getIoapicRedirCount() u32 {
     return ioapic_max_entries;
 }
 pub export fn apMain() callconv(.C) noreturn {
-
     // Builder implements AP 64-bit initialization, LAPIC enable, and atomic handshake
 }
 pub fn initAndBootSmp(target_cpus: usize) usize {
@@ -290,66 +288,66 @@ export fn smpTestMain() callconv(.C) noreturn {
 }
 ```
 ---
-
 ## 5. Step-by-Step Implementation Logic & State Transitions
-1. **Step 1: `src/mm/vmm.zig` APIC / IOAPIC MMIO and shared **
- * `vmm.init()` （ `loadCr3(kernel_pml4_phys)` of ） with 、 of 2 of MMIO pages Identity Map ：
+1. **Step 1: Map APIC / IOAPIC MMIO and share memory in `src/mm/vmm.zig`**
+   * In `vmm.init()` (before calling `loadCr3(kernel_pml4_phys)`), identity map the two MMIO pages:
      ```zig
      _ = mapPage(kernel_pml4_phys, 0xFEC0_0000, 0xFEC0_0000, PTE_PRESENT | PTE_WRITABLE | PTE_CACHE_DISABLE);
      _ = mapPage(kernel_pml4_phys, 0xFEE0_0000, 0xFEE0_0000, PTE_PRESENT | PTE_WRITABLE | PTE_CACHE_DISABLE);
      ```
- * ** 【important】 ** `0xFEC0_0000` and `0xFEE0_0000` `pdptIndex == 3` （ 3..4 GiB region） 。process of pages
+   * Ensure user processes share the 3..4 GiB range where `0xFEC0_0000` and `0xFEE0_0000` reside (`pdptIndex == 3`). In `vmm.cloneKernelPml4()`:
      ```zig
      dst_pdpt.entries[3] = src_pdpt.entries[3]; // Share 3..4 GiB Kernel MMIO (LAPIC/IOAPIC)
      ```
-2. **Step 2: `src/arch/x86_64/idt.zig` and `src/arch/x86_64/apic.zig` Implementation **
- * `idt.zig` `pub fn loadIdtOnAp() void` add、 `asm volatile ("lidt (%[p])" : : [p] "r" (&idtr) : "memory");
- * `apic.zig` of `apMain() callconv(.C) noreturn`:
- 1. `idt.loadIdtOnAp();` with IDT 。
-     2. `lapicWrite(LAPIC_REG_TPR, 0x00);`
- 3. `lapicWrite(LAPIC_REG_SVR, 0x0000_01FF);` （ AP of Local APIC enabled）。
-     4. `const my_id = readLapicId();`
-     5. `@atomicStore(u32, @as(*u32, @ptrFromInt(MAILBOX_CPU_ID)), my_id, .seq_cst);`
-     6. `_ = @atomicRmw(usize, &online_cpus, .Add, 1, .seq_cst);`
- 7. `@atomicStore(u32, @as(*u32, @ptrFromInt(MAILBOX_READY)), 1,.seq_cst);` （ BSP to notified）。
-     8. `while (true) { asm volatile ("hlt"); }`
- * `apic.zig` of `initAndBootSmp(target_cpus: usize) usize`:
- 1. MSR `0x1B` (`IA32_APIC_BASE`) `syscall_arch.rdmsr(0x1B)` with 、 Bit 11 (`0x800`) ⽴ `wrmsr` 。
-     2. `lapicWrite(LAPIC_REG_TPR, 0x00);`
- 3. `lapicWrite(LAPIC_REG_SVR, 0x0000_01FF);` （ BSP of Local APIC enabled）。
- 4. `const ver_reg = ioapicRead(0x01);` 、 `ioapic_max_entries = ((ver_reg >> 16) & 0xFF) + 1;` 
- 5. **AP of placed (`0x0000_8000`):**
+2. **Step 2: Implement `src/arch/x86_64/idt.zig` and `src/arch/x86_64/apic.zig`**
+   * In `idt.zig`, add `pub fn loadIdtOnAp() void` which executes `asm volatile ("lidt (%[p])" : : [p] "r" (&idtr) : "memory");`.
+   * In `apic.zig`, implement `apMain() callconv(.C) noreturn`:
+     1. Load IDT: `idt.loadIdtOnAp();`.
+     2. Set TPR: `lapicWrite(LAPIC_REG_TPR, 0x00);`.
+     3. Enable Local APIC: `lapicWrite(LAPIC_REG_SVR, 0x0000_01FF);`.
+     4. Query Local APIC ID: `const my_id = readLapicId();`.
+     5. Store APIC ID in mailbox: `@atomicStore(u32, @as(*u32, @ptrFromInt(MAILBOX_CPU_ID)), my_id, .seq_cst);`.
+     6. Increment online CPU counter: `_ = @atomicRmw(usize, &online_cpus, .Add, 1, .seq_cst);`.
+     7. Acknowledge boot to BSP: `@atomicStore(u32, @as(*u32, @ptrFromInt(MAILBOX_READY)), 1, .seq_cst);`.
+     8. Enter idle halt loop: `while (true) { asm volatile ("hlt"); }`.
+   * In `apic.zig`, implement `initAndBootSmp(target_cpus: usize) usize`:
+     1. Read `IA32_APIC_BASE` MSR via `syscall_arch.rdmsr(0x1B)`, set Bit 11 (`0x800`), and write back with `wrmsr`.
+     2. Set TPR: `lapicWrite(LAPIC_REG_TPR, 0x00);`.
+     3. Enable BSP Local APIC: `lapicWrite(LAPIC_REG_SVR, 0x0000_01FF);`.
+     4. Read IOAPIC version: `const ver_reg = ioapicRead(0x01); ioapic_max_entries = ((ver_reg >> 16) & 0xFF) + 1;`.
+     5. Copy AP trampoline to physical `0x0000_8000`:
         * `const tramp_len = @intFromPtr(&ap_trampoline_end) - @intFromPtr(&ap_trampoline_start);`
         * `const src = @as([*]const u8, @ptrFromInt(@intFromPtr(&ap_trampoline_start)))[0..tramp_len];`
         * `const dst = @as([*]u8, @ptrFromInt(TRAMPOLINE_ADDR))[0..tramp_len];`
         * `@memcpy(dst, src);`
- 6. ** AP (`apic_id = 1.. target_cpus`) of loop :**
-        * `@as(*volatile u64, @ptrFromInt(MAILBOX_CR3)).* = vmm.getKernelPml4Phys();`
-        * `@as(*volatile u64, @ptrFromInt(MAILBOX_RSP)).* = @intFromPtr(&ap_stacks[apic_id]) + AP_STACK_SIZE;`
-        * `@as(*volatile u64, @ptrFromInt(MAILBOX_ENTRY)).* = @intFromPtr(&apMain);`
-        * `@atomicStore(u32, @as(*u32, @ptrFromInt(MAILBOX_READY)), 0, .seq_cst);`
-        * `asm volatile ("mfence" ::: "memory");`
-        * **Send INIT IPI:**
-          `lapicWrite(LAPIC_REG_ICR_HIGH, @as(u32, @intCast(apic_id)) << 24);`
-          `lapicWrite(LAPIC_REG_ICR_LOW, 0x0000_4500);`
- `for (0..10_000) |_| io.ioWait();` （ 10ms ）
-        * **Send SIPI #1 (Vector `0x08` -> `0x8000`):**
-          `lapicWrite(LAPIC_REG_ICR_HIGH, @as(u32, @intCast(apic_id)) << 24);`
-          `lapicWrite(LAPIC_REG_ICR_LOW, 0x0000_4600 | @as(u32, TRAMPOLINE_VECTOR));`
- * ⼤ `100_000` of loop with `@atomicLoad(u32, @as(*u32, @ptrFromInt(MAILBOX_READY)),.seq_cst) ==
- * wokenverify with `serial.print("[TINUX_SMP] Application Processor (APIC ID {d}) booted into 64-bit Long Mo
-     7. `return getOnlineCpuCount();`
-3. **Step 3: `/proc/cpuinfo` and `/proc/stat` of (`src/fs/procfs.zig`)**
- * `cpuinfo_buf` of `[512]u8` 。
- * `procfs.syncProcessNodes()` （ and `initAndRegister` ） with 、 `0..apic.getOnlineCpuCount()` of loop times
- * `"proc/stat"` `cpu0`, `cpu1` of ⽅ of ⾏output update。
-4. **Step 4: `src/syscall/dispatch.zig`, `src/main.zig`, `scripts/verify_qemu.sh` of update **
- * `dispatch.zig` `SYS_SCHED_YIELD (24)`, `SYS_SCHED_SETAFFINITY (203)`, `SYS_SCHED_GETAFFINITY (204)`, `SYS_GET
- * `src/main.zig` of `kmain()` with `vmm.init()` and `heap.init()` of `const cpus = apic.initAndBootSmp(2);` 
- * `scripts/verify_qemu.sh` with ：
-     1. `zig build-exe src/user/smp_test.zig -target x86_64-linux-none -O ReleaseSmall -fno-pie -femit-bin=.cache/in
- 2. QEMU of **`-smp 2`** add。
- 3. type（ `/bin/sh` ） to of column ⼊：
+     6. Loop over APs (`apic_id = 1..target_cpus`):
+        * Write mailbox values:
+          * `@as(*volatile u64, @ptrFromInt(MAILBOX_CR3)).* = vmm.getKernelPml4Phys();`
+          * `@as(*volatile u64, @ptrFromInt(MAILBOX_RSP)).* = @intFromPtr(&ap_stacks[apic_id]) + AP_STACK_SIZE;`
+          * `@as(*volatile u64, @ptrFromInt(MAILBOX_ENTRY)).* = @intFromPtr(&apMain);`
+          * `@atomicStore(u32, @as(*u32, @ptrFromInt(MAILBOX_READY)), 0, .seq_cst);`
+          * `asm volatile ("mfence" ::: "memory");`
+        * Send INIT IPI:
+          * `lapicWrite(LAPIC_REG_ICR_HIGH, @as(u32, @intCast(apic_id)) << 24);`
+          * `lapicWrite(LAPIC_REG_ICR_LOW, 0x0000_4500);`
+          * Wait 10 ms: `for (0..10_000) |_| io.ioWait();`
+        * Send SIPI #1 (Vector `0x08` -> `0x8000`):
+          * `lapicWrite(LAPIC_REG_ICR_HIGH, @as(u32, @intCast(apic_id)) << 24);`
+          * `lapicWrite(LAPIC_REG_ICR_LOW, 0x0000_4600 | @as(u32, TRAMPOLINE_VECTOR));`
+        * Poll mailbox ready: loop up to 100,000 iterations waiting for `@atomicLoad(u32, @as(*u32, @ptrFromInt(MAILBOX_READY)), .seq_cst) == 1`.
+        * If ready, log confirmation: `serial.print("[TINUX_SMP] Application Processor (APIC ID {d}) booted into 64-bit Long Mode!\n", .{apic_id});`.
+     7. Return `getOnlineCpuCount();`.
+3. **Step 3: Implement multi-core `/proc/cpuinfo` and `/proc/stat` in `src/fs/procfs.zig`**
+   * Provide a buffer `cpuinfo_buf: [512]u8`.
+   * In `procfs.syncProcessNodes()` (and `initAndRegister`), loop over `0..apic.getOnlineCpuCount()` and format per-processor entries.
+   * Update `/proc/stat` to emit `cpu0` and `cpu1` lines in addition to the aggregate `cpu` line.
+4. **Step 4: Update `src/syscall/dispatch.zig`, `src/main.zig`, and `scripts/verify_qemu.sh`**
+   * In `dispatch.zig`, implement `SYS_SCHED_YIELD (24)`, `SYS_SCHED_SETAFFINITY (203)`, `SYS_SCHED_GETAFFINITY (204)`, and `SYS_GETCPU (309)`.
+   * In `src/main.zig` `kmain()`, after `vmm.init()` and `heap.init()`, call `const cpus = apic.initAndBootSmp(2);` and emit APIC status log.
+   * In `scripts/verify_qemu.sh`:
+     1. Build test binary: `zig build-exe src/user/smp_test.zig -target x86_64-linux-none -O ReleaseSmall -fno-pie -femit-bin=.cache/initramfs/bin/smp_test`.
+     2. Add `-smp 2` to QEMU launch parameters.
+     3. Insert test commands into interactive shell execution:
         ```sh
         echo "[TINUX_SH] Running SMP multi-core affinity & getcpu verification..."
         /bin/smp_test
@@ -358,7 +356,6 @@ export fn smpTestMain() callconv(.C) noreturn {
         echo "[TINUX_SMP_DONE] Local APIC, IOAPIC, INIT-SIPI-SIPI AP boot, and SMP syscalls verified!"
         exit 0
         ```
-
 ---
 ## 6. Verification Harness & Pass Criteria
 ### 6.1 Verification Command
@@ -366,7 +363,7 @@ export fn smpTestMain() callconv(.C) noreturn {
 ./scripts/verify_qemu.sh TASK-020 10
 ```
 ### 6.2 Expected Output (Pass Criteria)
-QEMU output of （ APIC ID 1 of 64-bit 、 2 of mask `0x03` 、 and `/proc/cpuinfo` of `p
+Verify that all expected serial logs are emitted and `verify_qemu.sh` exits with code `0`:
 ```text
 [TINUX_TEST] START: TASK-020
 [TINUX_SMP] Application Processor (APIC ID 1) booted into 64-bit Long Mode!
@@ -392,11 +389,11 @@ apicid : 1
 ```
 ---
 ## 7. Escalation Report Template (On 3rd Consecutive Failure)
-3 timesconsecutive with or `./scripts/verify_qemu.sh TASK-020 10` when、 Builder fixloop stop、 `./script
+If compilation or `./scripts/verify_qemu.sh TASK-020 10` fails 3 consecutive times, stop the fix loop, execute `./scripts/triage_crash.py --out ESCALATION_REPORT.md`, and record the failure details below:
 ```markdown
 # Escalation Report: TASK-020
 ## 1. Failure Summary
-* **Failed Stage:** [zig build / LAPIC MMIO #PF (0xFEE00000 Unmapped in User CR3) / AP Trampoline Triple Fault / MAI
+* **Failed Stage:** [zig build / LAPIC MMIO #PF (0xFEE00000 Unmapped in User CR3) / AP Trampoline Triple Fault / MAILBOX_READY Timeout / sched_getaffinity Mismatch]
 * **APIC & SMP Mailbox Dump:** [online_cpus, MAILBOX_CR3, MAILBOX_RSP, MAILBOX_READY, MAILBOX_CPU_ID]
 * **Attempt History:**
   * Attempt 1: [Changes attempted and observed outcome]
@@ -404,11 +401,11 @@ apicid : 1
   * Attempt 3: [Changes attempted and observed outcome]
 ## 2. Automated Crash Triage & Serial Log Output
 ```text
-[scripts/triage_crash.py of output and /tmp/tinux_qemu_TASK-020.log of ⽂ ]
+[Output from scripts/triage_crash.py and serial log lines from /tmp/tinux_qemu_TASK-020.log]
 ```
 ## 3. Current Code Diff
 ```diff
-[Relevant code diff for src/arch/x86_64/ap_trampoline.S, src/arch/x86_64/apic.zig, src/mm/vmm.zig ]
+[Relevant code diff for src/arch/x86_64/ap_trampoline.S, src/arch/x86_64/apic.zig, src/mm/vmm.zig]
 ```
 ## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]

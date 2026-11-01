@@ -1,4 +1,4 @@
-# Tinux Autonomous Kernel Engineering — Master Orchestrator Prompt
+# Tinux Autonomous Kernel Engineering: Master Orchestrator Prompt
 
 > **Target Environment:** Google Antigravity IDE / CLI  
 > * **Primary Builder Model:** Gemini 3.8 Flash High (Fast Autonomous Execution Loop)  
@@ -13,31 +13,31 @@ Before starting execution, verify that the workspace matches the following layou
 
 ```text
 tinux/
-├── ANTIGRAVITY_MASTER_PROMPT.md   # Master orchestration prompt
-├── PROGRESS.md                    # Progress tracker updated autonomously by the agent
-├── docs/
-│   ├── SPEC_TEMPLATE.md           # Common specification template
-│   └── specs/
-│       ├── SPEC_TASK_001.md       # Boot, Serial COM1 & QEMU Harness
-│       ├── SPEC_TASK_002.md       # GDT/TSS, IDT Exceptions & PMM
-│       ├── SPEC_TASK_003.md       # 4-Level VMM & Kernel Heap Allocator
-│       ├── SPEC_TASK_004.md       # SYSCALL/SYSRET, Ring 3 & sys_write/exit
-│       ├── SPEC_TASK_005.md       # Static ELF64 Loader, Auxv, TLS & brk
-│       ├── SPEC_TASK_006.md       # VFS, CPIO Initramfs & Unmodified BusyBox
-│       ├── SPEC_TASK_007.md       # Multi-Process (fork/execve/wait4) & /bin/sh
-│       ├── SPEC_TASK_008.md       # Pipes (pipe2), dup2 Redirection & /proc
-│       ├── SPEC_TASK_009.md       # Writable tmpfs, getdents64 & ls/mkdir/rm
-│       ├── SPEC_TASK_010.md       # Hardware Timer (PIT/PIC), nanosleep, ps & kill
-│       ├── SPEC_TASK_011.md       # Dynamic ELF Loader (PT_INTERP / ld-musl)
-│       ├── SPEC_TASK_012.md       # Interactive TTY Console (IRQ4 / termios)
-│       ├── SPEC_TASK_013.md       # Linux Socket API (TCP Loopback & AF_UNIX)
-│       ├── SPEC_TASK_014.md       # Multi-Threading (CLONE_VM), futex & epoll
-│       ├── SPEC_TASK_015.md       # PCI Enumeration & VirtIO-Block (/dev/vda)
-│       ├── SPEC_TASK_016.md       # Persistent TarFS Mount (sys_mount / sync)
-│       ├── SPEC_TASK_017.md       # VirtIO-Net PCI Network Driver (ICMP Ping)
-│       ├── SPEC_TASK_018.md       # User-Space Signal Delivery & sigaction
-│       ├── SPEC_TASK_019.md       # UDP/IPv4 Socket Stack & DNS Resolver
-│       └── SPEC_TASK_020.md       # Local APIC / IOAPIC Init & SMP Boot
+|-- ANTIGRAVITY_MASTER_PROMPT.md   # Master orchestration prompt
+|-- PROGRESS.md                    # Progress tracker updated autonomously by the agent
+|-- docs/
+|   |-- SPEC_TEMPLATE.md           # Common specification template
+|   \-- specs/
+|       |-- SPEC_TASK_001.md       # Boot, Serial COM1 & QEMU Harness
+|       |-- SPEC_TASK_002.md       # GDT/TSS, IDT Exceptions & PMM
+|       |-- SPEC_TASK_003.md       # 4-Level VMM & Kernel Heap Allocator
+|       |-- SPEC_TASK_004.md       # SYSCALL/SYSRET, Ring 3 & sys_write/exit
+|       |-- SPEC_TASK_005.md       # Static ELF64 Loader, Auxv, TLS & brk
+|       |-- SPEC_TASK_006.md       # VFS, CPIO Initramfs & Unmodified BusyBox
+|       |-- SPEC_TASK_007.md       # Multi-Process (fork/execve/wait4) & /bin/sh
+|       |-- SPEC_TASK_008.md       # Pipes (pipe2), dup2 Redirection & /proc
+|       |-- SPEC_TASK_009.md       # Writable tmpfs, getdents64 & ls/mkdir/rm
+|       |-- SPEC_TASK_010.md       # Hardware Timer (PIT/PIC), nanosleep, ps & kill
+|       |-- SPEC_TASK_011.md       # Dynamic ELF Loader (PT_INTERP / ld-musl)
+|       |-- SPEC_TASK_012.md       # Interactive TTY Console (IRQ4 / termios)
+|       |-- SPEC_TASK_013.md       # Linux Socket API (TCP Loopback & AF_UNIX)
+|       |-- SPEC_TASK_014.md       # Multi-Threading (CLONE_VM), futex & epoll
+|       |-- SPEC_TASK_015.md       # PCI Enumeration & VirtIO-Block (/dev/vda)
+|       |-- SPEC_TASK_016.md       # Persistent TarFS Mount (sys_mount / sync)
+|       |-- SPEC_TASK_017.md       # VirtIO-Net PCI Network Driver (ICMP Ping)
+|       |-- SPEC_TASK_018.md       # User-Space Signal Delivery & sigaction
+|       |-- SPEC_TASK_019.md       # UDP/IPv4 Socket Stack & DNS Resolver
+|       \-- SPEC_TASK_020.md       # Local APIC / IOAPIC Init & SMP Boot
 ```
 
 ---

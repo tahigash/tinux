@@ -1,4 +1,5 @@
 # Tinux Implementation Specification: TASK-012
+
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
 > * **Architect (Structure & Harness):** Gemini 4 Argon
 > * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
@@ -8,74 +9,74 @@
 ## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
 You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
- specification with definition COM1 RX interruptvector（ Vector 36 / IRQ4 ）、 `KernelTermios` struct（ 36 bytes ）、 TTY 
-2. **Dual RX Ingestion Guarantee （ IRQ4 ＋ ring of ⼆） :**
- QEMU of `-serial stdio` pipe⼊⼒ with 、 PIC of interruptmaskunlocked of UART FIFO 
-3. **Strict Zig Version Idioms （ Zig ⽂ of strictly adhere） :**
- must 1 of 「 Zig Idiom Cheat Sheet 」 、function ⼀use。
+   Do not alter COM1 RX interrupt vector assignments (Vector 36 / IRQ4), `KernelTermios` struct layout (36 bytes), TTY buffer sizes (`TTY_BUF_SIZE = 4096`), or I/O port assignments (`0x03F8`).
+2. **Dual RX Ingestion Guarantee (IRQ4 + Polling):**
+   Because QEMU stdio pipes may buffer input, combine both the IRQ4 interrupt handler and timer tick polling (`tty.pollSerialRx()`) to guarantee serial bytes are ingested into the TTY line buffer.
+3. **Strict Zig Version Idioms:**
+   Adhere strictly to modern Zig idioms (0.13+) as defined in Section 1. Do not use deprecated functions like `@ptrToInt` or `@intToPtr`.
 4. **3-Strike Escalation Protocol:**
- * or `./scripts/verify_qemu.sh TASK-012 10` **3 timesconsecutive with ** when、 **4 times⽬ of speculativefix ⾏
+   * If `zig build` or `./scripts/verify_qemu.sh TASK-012 10` fails 3 consecutive times, do not make a 4th speculative guess.
    * Stop immediately after the 3rd failure, generate `ESCALATION_REPORT.md` following Section 7, and halt execution.
 ---
-## 1. Zig Idiom Cheat Sheet (KernelFreestanding Rules)
+## 1. Zig Idiom Cheat Sheet (Kernel Freestanding Rules)
+Use modern Zig syntax (0.13 / 0.14 / 0.15+) exclusively to prevent compilation errors:
 | Operation | Deprecated (Prohibited) | Required (Modern Zig) |
 | :--- | :--- | :--- |
 | Pointer to integer | `@ptrToInt(ptr)` | `@intFromPtr(ptr)` |
 | Integer to pointer | `@intToPtr(*T, addr)` | `@as(*T, @ptrFromInt(addr))` |
-| ⾮ 32bit write | `@ptrCast(*i32, ptr).* = v` | `std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(ptr)), v,.li
-| ⾮ 32bit | `@ptrCast(*const i32, ptr).*` | `std.mem.readInt(i32, @as(*const [4]u8, @ptrFromInt(ptr)),
-| structverification | execute | `comptime { std.debug.assert(@sizeOf(T) == N); }` |
+| Unaligned 32-bit write | `@ptrCast(*i32, ptr).* = v` | `std.mem.writeInt(i32, @as(*[4]u8, @ptrFromInt(ptr)), v, .little)` |
+| Unaligned 32-bit read | `@ptrCast(*const i32, ptr).*` | `std.mem.readInt(i32, @as(*const [4]u8, @ptrFromInt(ptr)), .little)` |
+| Struct size verification | Runtime check | `comptime { std.debug.assert(@sizeOf(T) == N); }` |
 ---
 ## 2. Task Metadata & Scope
 * **Task ID:** `TASK-012`
-* **Title:** `Bidirectional TTY Console (UART IRQ4 + Line Discipline + termios/pgrp ioctls), Interactive Shell via S
+* **Title:** `Bidirectional TTY Console (UART IRQ4 + Line Discipline + termios/pgrp ioctls), Interactive Shell via Stdin`
 * **Target Subsystem:** `drivers`, `arch/x86_64`, `proc`, `fs`, `syscall`
 * **Target Files to Create / Modify:**
-  * `src/drivers/serial.zig` (Modify: enable UART RX interrupt `IER = 0x01` and add non-blocking `readByteNonBlockin
-  * `src/drivers/tty.zig` (Create: TTY RX ring buffer, canonical/echo line discipline, `KernelTermios`, foreground `
-  * `src/drivers/timer.zig` (Modify: unmask IRQ4 on Master PIC `0xEE` and call `tty.pollSerialRx()` inside `onTick()
+  * `src/drivers/serial.zig` (Modify: enable UART RX interrupt `IER = 0x01` and add non-blocking `readByteNonBlocking()`)
+  * `src/drivers/tty.zig` (Create: TTY RX ring buffer, canonical/echo line discipline, `KernelTermios`, foreground process group)
+  * `src/drivers/timer.zig` (Modify: unmask IRQ4 on Master PIC `0xEE` and call `tty.pollSerialRx()` inside `onTick()`)
   * `src/arch/x86_64/isr.S` (Modify: add `ISR_NOERR 33..36` so Vector 36 = IRQ4 COM1 is handled cleanly)
   * `src/arch/x86_64/idt.zig` (Modify: register vectors `32..36` and dispatch Vector 36 to `tty.onIrq4()`)
   * `src/proc/task.zig` (Modify: add `pgid: usize` and `WAITING_TTY = 7` state, wake TTY waiters on input)
   * `src/fs/vfs.zig` (Modify: register `/dev/tty` and `/dev/console` mapped to `CONSOLE_IN` / `CONSOLE_OUT`)
-  * `src/syscall/dispatch.zig` (Modify: connect `CONSOLE_IN` in `sysRead` to `tty.read()`, expand `sysIoctl` with `T
-  * `src/main.zig` (Modify: initialize `tty.init()` and spawn interactive `/bin/sh` reading commands from standard i
-  * `scripts/verify_qemu.sh` (Modify: pipe an interactive multi-command operator session into QEMU stdin and verify 
-
+  * `src/syscall/dispatch.zig` (Modify: connect `CONSOLE_IN` in `sysRead` to `tty.read()`, expand `sysIoctl` with termios commands)
+  * `src/main.zig` (Modify: initialize `tty.init()` and spawn interactive `/bin/sh` reading commands from standard input)
+  * `scripts/verify_qemu.sh` (Modify: pipe an interactive multi-command operator session into QEMU stdin and verify execution)
 ---
 ## 3. UART RX, TTY Line Discipline & `ioctl` ABI Contract (Opus 5.5 Audited)
 ### 3.1 UART COM1 RX (`0x3F8`, IRQ4 = Vector 36) Contract
 1. **UART Initialization (`serial.init`):**
- * （ DLAB unlocked `LCR = 0x03` ）、 `COM1_PORT + 1` (`IER`) **`0x01`** （ Received Data Available Inte
- * `COM1_PORT + 2` (`FCR`) initialized ⼀enabled、 from first 。
+   * After baud configuration (DLAB unlocked, `LCR = 0x03`), write `0x01` to `COM1_PORT + 1` (`IER`) to enable Received Data Available Interrupts.
+   * Configure `COM1_PORT + 2` (`FCR`) with `0xC7` (enable FIFO, clear TX/RX FIFO, 14-byte trigger threshold).
 2. **Non-Blocking Byte Read (`serial.readByteNonBlocking() ?u8`):**
- * `LSR` (`COM1_PORT + 5` = `0x3FD`) of Bit 0 (`0x01`: Data Ready) 。
- * `(io.inb(COM1_PORT + 5) & 0x01) != 0` with `io.inb(COM1_PORT)` 、 `0` with `null` 。
+   * Read Line Status Register `LSR` (`COM1_PORT + 5` = `0x3FD`).
+   * If `(io.inb(COM1_PORT + 5) & 0x01) != 0`, read and return `io.inb(COM1_PORT)`. Otherwise, return `null`.
 3. **8259A Master PIC Unmasking (`0x21`):**
- * Master PIC of IMR （port `0x21` ） **`0xEE`** （ `~((1 << 0) | (1 << 4))` ） write、 **IRQ0 （ PIT Timer = Vecto
- * Vector 36 of interrupt Master PIC to `io.outb(0x20, 0x20)` (EOI) transmit。
+   * Write `0xEE` (`~((1 << 0) | (1 << 4))`) to Master PIC IMR (port `0x21`) to unmask IRQ0 (PIT Timer = Vector 32) and IRQ4 (COM1 Serial = Vector 36).
+   * In Vector 36 interrupt handler, send EOI (`0x20`) to Master PIC via `io.outb(0x20, 0x20)`.
 ### 3.2 TTY Line Discipline & `KernelTermios` Contract (`src/drivers/tty.zig`)
-Linux of x86_64 `struct ktermios` **36 bytes** 。 `musl` and `glibc` of `tcgetattr()` / `tcsetattr()
+The Linux x86_64 `struct ktermios` occupies exactly 36 bytes. It is required by `tcgetattr()` and `tcsetattr()` in musl and glibc:
 | `ioctl` Name | Request Code | Argument (`argp`) | Exact Kernel Behavior & Return Contract |
 | :--- | :--- | :--- | :--- |
-| **`TCGETS`** | `0x5401` | `*KernelTermios` (36B) | of `current_termios` (36 bytes) `argp` `0` 
-| **`TCSETS` / `TCSETSW` / `TCSETSF`** | `0x5402` / `0x5403` / `0x5404` | `*const KernelTermios` | `argp` from 36 byt
-| **`TIOCSCTTY`** | `0x540E` | `arg: usize` | of 。 `0` (Success) 。 |
-| **`TIOCGPGRP`** | `0x540F` | `*i32` (4B) | processloop ID (`fg_pgid`) `i32` and `argp` 
-| **`TIOCSPGRP`** | `0x5410` | `*const i32` (4B) | `argp` from `i32` 、 `fg_pgid` update `0` 。 |
-| **`TIOCGWINSZ`** | `0x5413` | `*Winsize` (8B) | `ws_row = 24, ws_col = 80, ws_xpixel = 0, ws_ypixel = 0` 
-| **`TIOCSWINSZ`** | `0x5414` | `*const Winsize` (8B) | update ⼊、 `0` 。 |
+| **`TCGETS`** | `0x5401` | `*KernelTermios` (36B) | Copy `current_termios` (36 bytes) to user buffer `argp`. Returns 0. |
+| **`TCSETS` / `TCSETSW` / `TCSETSF`** | `0x5402` / `0x5403` / `0x5404` | `*const KernelTermios` | Copy 36 bytes from user buffer `argp` into `current_termios`. Returns 0. |
+| **`TIOCSCTTY`** | `0x540E` | `arg: usize` | Make current terminal controlling terminal. Returns 0 on success. |
+| **`TIOCGPGRP`** | `0x540F` | `*i32` (4B) | Write foreground process group ID (`fg_pgid`) as 32-bit integer to `argp`. Returns 0. |
+| **`TIOCSPGRP`** | `0x5410` | `*const i32` (4B) | Read 32-bit integer from `argp` and update `fg_pgid`. Returns 0. |
+| **`TIOCGWINSZ`** | `0x5413` | `*Winsize` (8B) | Return window size: `ws_row = 24, ws_col = 80, ws_xpixel = 0, ws_ypixel = 0`. Returns 0. |
+| **`TIOCSWINSZ`** | `0x5414` | `*const Winsize` (8B) | Accept window size update from user. Returns 0. |
 #### Line Discipline Input Rules (`tty.onCharReceived(ch: u8)`):
 1. **CR-to-NL Translation (`ICRNL = 0x0100`):**
- receive `'\r'` (`0x0D`) with 、 `(termios.c_iflag & 0x0100) != 0` of when、 `'\n'` (`0x0A`) 。
+   When `\r` (`0x0D`) is received and `(termios.c_iflag & 0x0100) != 0`, translate byte to `\n` (`0x0A`).
 2. **Ctrl+C (`0x03`, `VINTR`) Handling:**
- receive `0x03` with `(termios.c_lflag & 0x0001) != 0` (`ISIG`) of when、 `"^C\n"` output、 `fg_
+   When `0x03` is received and `(termios.c_lflag & 0x0001) != 0` (`ISIG`), echo `^C\n` and deliver `SIGINT` to `fg_pgid`.
 3. **Ctrl+D (`0x04`, `VEOF`) Handling:**
- receive `0x04` of when、 `eof_pending = true` flags ⽴waitingtask（ `.WAITING_TTY` ） woken。
+   When `0x04` is received, set `eof_pending = true` and wake any tasks waiting in `.WAITING_TTY`.
 4. **Backspace (`0x08` or `0x7F`, `VERASE`) Handling:**
- （ `ICANON = 0x0002` ） 、 of ⾏ ⽂ringbuffer 1 ⽂、 `ECHO` 
+   In canonical mode (`ICANON = 0x0002`), if previous character is not `\n` and `count > 0`, decrement write index, decrement buffer count, and erase character visually with `\x08 \x08`.
 5. **Echo & Buffering (`ECHO = 0x0008`):**
- of ⽂ or `'\n'` receiveringbuffer（ `rx_buf: [4096]u8` ） 、 `(termios.c_lflag & 0x0008) !
+   Store received byte in `rx_buf: [4096]u8`. If `(termios.c_lflag & 0x0008) != 0`, echo byte back to UART (converting `\n` to `\r\n`).
 ---
 ## 4. Exact Data Structures & Signatures
 ### 4.1 `src/drivers/tty.zig`
@@ -166,113 +167,90 @@ pub fn handleIoctl(req: usize, argp: usize, is_valid_buf_fn: *const fn (usize, u
 ```
 ### 4.2 `src/arch/x86_64/isr.S` & `src/arch/x86_64/idt.zig` Extensions
 1. **`src/arch/x86_64/isr.S`:**
- `ISR_NOERR 32` add、 `isr_stub_table` 37 （ `0..36` ） ：
+   After `ISR_NOERR 32`, add stubs for vectors 33 through 36:
    ```asm
    ISR_NOERR 33
    ISR_NOERR 34
    ISR_NOERR 35
    ISR_NOERR 36
-
    ```
 2. **`src/arch/x86_64/idt.zig`:**
- * `extern const isr_stub_table: [37]usize;` update、 `0..37` `setGate` with 。
- * `isrDispatch(frame: *TrapFrame)` with ：
-     * `frame.vector == 32` → `timer.onTick(); return;`
-     * `frame.vector == 36` → `tty.onIrq4(); return;`
- * `frame.vector >= 32 and frame.vector < 48` （ of of IRQ ） → `io.outb(0x20, 0x20); return;`
+   * Update `extern const isr_stub_table: [37]usize;` to register gates `0..36`.
+   * In `isrDispatch(frame: *TrapFrame)`:
+     * `if (frame.vector == 32) { timer.onTick(); return; }`
+     * `if (frame.vector == 36) { tty.onIrq4(); return; }`
+     * `if (frame.vector >= 32 and frame.vector < 48) { io.outb(0x20, 0x20); return; }`
 ---
 ## 5. Step-by-Step Implementation Logic & State Transitions
-1. **Step 1: `src/drivers/serial.zig` and `src/drivers/timer.zig` of update **
- * `serial.init()` with （ `LCR = 0x03` ） and FIFO of 、 `io.outb(COM1_PORT + 1, 0x01);` execute R
- * `serial.zig` of ⾮blockingfunction add：
+1. **Step 1: Update `src/drivers/serial.zig` and `src/drivers/timer.zig`:**
+   * In `serial.init()`, enable RX interrupt by writing `0x01` to `COM1_PORT + 1`.
+   * Add non-blocking read function in `src/drivers/serial.zig`:
      ```zig
      pub fn readByteNonBlocking() ?u8 {
          if ((io.inb(COM1_PORT + 5) & 0x01) == 0) return null;
          return io.inb(COM1_PORT);
      }
      ```
- * `timer.init()` of Master PIC mask `io.outb(PIC1_DATA, 0xEE);` （ IRQ0 and IRQ4 mask） update。
- * `timer.onTick()` with `tty.pollSerialRx();` 。
-2. **Step 2: `src/drivers/tty.zig` Implementation **
- * `pollSerialRx()` ：
- `while (serial.readByteNonBlocking()) |raw_b|` with loop：
-     1. `var b = raw_b;`
-     2. `if (b == '\r' and (termios.c_iflag & ICRNL) != 0) b = '\n';`
-     3. `if (b == 0x04 and (termios.c_lflag & ICANON) != 0) { eof_pending = true; task.wakeTtyWaiters(); continue; }
-     4. `if ((b == 0x08 or b == 0x7F) and (termios.c_lflag & ICANON) != 0)`:
- of ⽂ `'\n'` with `count > 0` with `write_pos = (write_pos + TTY_BUF_SIZE - 1) % TTY_BUF_SIZE; cou
-     5. `if (count < TTY_BUF_SIZE)`:
-        `rx_buf[write_pos] = b; write_pos = (write_pos + 1) % TTY_BUF_SIZE; count += 1;`
-        `if (b == '\n') newline_count += 1;`
-        `if ((termios.c_lflag & ECHO) != 0)`:
-          `if (b == '\n') serial.writeString("\r\n") else serial.writeByte(b);`
-        `task.wakeTtyWaiters();`
-   * `read(dst: []u8) TtyReadResult`:
-     1. `pollSerialRx();`
-     2. `if (!hasReadableData()) return .would_block;`
-     3. `if (count == 0 and eof_pending) { eof_pending = false; return .eof; }`
-     4. `var n: usize = 0;`
-     5. `while (n < dst.len and count > 0)`:
-        * `const b = rx_buf[read_pos];`
-        * `read_pos = (read_pos + 1) % TTY_BUF_SIZE;`
-        * `count -= 1;`
-        * `dst[n] = b; n += 1;`
-        * `if (b == '\n')`:
-          `if (newline_count > 0) newline_count -= 1;`
- `if ((termios.c_lflag & ICANON) != 0) break;` （ with 1 ⾏ with ！）
-     6. `return .{ .bytes = n };`
-3. **Step 3: `src/proc/task.zig` and `src/fs/vfs.zig` of update **
- * `TaskState` `WAITING_TTY = 7` add、 `Task` struct `pgid: usize = 1` add（ `initPid1` with `pgid = 1` 、
- * `task.zig` `pub fn wakeTtyWaiters() void` add、 `t.state ==.WAITING_TTY` of task `t.state =.READY` 
- * `task.scheduleNextOrWait()` ：
- `wakeSleepingTasks(timer.getTicks());` `if (tty.hasReadableData()) wakeTtyWaiters();` 。、
- * `vfs.init()` with `"dev/tty"` and `"dev/console"` `S_IFCHR | 0o666` and 。 `vfs.open` with `"de
-4. **Step 4: `src/syscall/dispatch.zig` of update **
- * ** ⽅ :**
- * `sysWrite` / `sysWritev` 、 `entry.kind ==.CONSOLE_OUT or entry.kind ==.CONSOLE_IN` of with 
- * `sysRead` 、 `entry.kind ==.CONSOLE_IN or entry.kind ==.CONSOLE_OUT` of when、 `tty.read(temp_slice)` 
- * `.bytes => |n|` buffer `n` 。
- * `.eof` `0` 。
- * `.would_block` ： `frame.user_rip -= 2; frame.rax = 0; cur.state =.WAITING_TTY; cur.saved_frame = frame;
- * **`sysIoctl` (16) of :**
- FD （ or Device） of when、 `tty.handleIoctl(req, argp, &validateUserBuffer)` 。
- * ** processloop & ring Syscalls:**
- * `sysSetpgid(pid_arg, pgid_arg)` (109): `target = if (pid_arg == 0) cur else findByPid(pid_arg)` of `pgid = if 
-
- * `sysGetpgrp()` (111) / `sysGetpgid(pid_arg)` (121): `cur.pgid` 。
- * `sysPoll(fds_ptr, nfds, timeout)` (7) & `sysPpoll` (271): `nfds > 0` of `struct pollfd { fd: i32, events: i1
-5. **Step 5: `src/main.zig` and `scripts/verify_qemu.sh` of update（typeverification） **
- * `src/main.zig` of `kmain()` with ：
-     1. `serial.writeString("[TINUX_TEST] START: TASK-012\n");`
- 2. `tty.init();` initialized add。
- 3. PID 1 of arguments of **`const argv = [_][]const u8{ "/bin/sh" };`** （ 
-     4. `serial.writeString("[TINUX_INIT] Spawning interactive shell PID 1 (/bin/sh)...\n");`
- * `scripts/verify_qemu.sh` of update：
- * `/bin/sh` and arguments with when、 FD 0 from 1 ⾏ `sys_read` with 
- * `verify_qemu.sh` with QEMU 、 `/bin/sh` ⼊⼒ from ⼊⼒ to column 
-       ```bash
-       (
-           sleep 0.4
-           cat << 'EOF'
-       export TINUX_STAGE="Interactive-TTY-Ready"
-       echo "[TINUX_TTY] Operator session active: $TINUX_STAGE"
-       /bin/mkdir /tmp/ops
-       echo "Linux asset compatibility verified on Tinux!" > /tmp/ops/report.txt
-       /bin/cat /tmp/ops/report.txt | /bin/grep Tinux
-       /bin/dyn_inspect
-       /bin/ps
-       echo "[TINUX_OPS] All interactive Linux operations completed successfully!"
-       exit 0
-       EOF
-       ) | timeout "$TIMEOUT_SEC" qemu-system-x86_64 \
-           -kernel "$KERNEL_BIN" \
-           -nographic \
-           -no-reboot \
-           -serial stdio \
-           -monitor none \
-           -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
-           > "$LOG_FILE" 2>&1
-       ```
+   * In `timer.init()`, configure Master PIC mask with `io.outb(PIC1_DATA, 0xEE);` to unmask IRQ0 and IRQ4.
+   * In `timer.onTick()`, call `tty.pollSerialRx();`.
+2. **Step 2: Implement `src/drivers/tty.zig`:**
+   * In `pollSerialRx()`:
+     Drain bytes while `serial.readByteNonBlocking()` returns data:
+     1. Translate `\r` to `\n` if `ICRNL` flag is active.
+     2. If `b == 0x04` and `ICANON` is active, set `eof_pending = true` and call `task.wakeTtyWaiters()`.
+     3. If `b == 0x08` or `b == 0x7F` in canonical mode, delete previous character if buffer has content.
+     4. Append byte to `rx_buf` circular buffer and echo to serial console if `ECHO` flag is active.
+     5. Call `task.wakeTtyWaiters()`.
+   * In `read(dst: []u8) TtyReadResult`:
+     1. Call `pollSerialRx()`.
+     2. If `!hasReadableData()`, return `.would_block`.
+     3. If `count == 0 and eof_pending`, clear flag and return `.eof`.
+     4. Consume bytes from `rx_buf` into `dst` up to newline in canonical mode, or up to `dst.len` in raw mode.
+     5. Return `.{ .bytes = n }`.
+3. **Step 3: Update `src/proc/task.zig` and `src/fs/vfs.zig`:**
+   * Add `WAITING_TTY = 7` to `TaskState`.
+   * Add `pgid: usize = 1` field to `Task` struct.
+   * Add `wakeTtyWaiters()` function in `src/proc/task.zig` to transition tasks in `WAITING_TTY` to `READY`.
+   * In `task.scheduleNextOrWait()`, wake sleeping tasks and TTY waiters when readable data is available.
+   * In `src/fs/vfs.zig` `init()`, register `/dev/tty` and `/dev/console` with `S_IFCHR | 0o666`.
+4. **Step 4: Update `src/syscall/dispatch.zig`:**
+   * In `sysRead`, if file descriptor is `CONSOLE_IN` or `CONSOLE_OUT`, invoke `tty.read()`:
+     * On `.bytes => |n|`, return `n`.
+     * On `.eof`, return 0.
+     * On `.would_block`, rewind instruction pointer (`frame.user_rip -= 2`), set `cur.state = .WAITING_TTY`, save frame, and switch tasks.
+   * In `sysIoctl(16)`, dispatch TTY file descriptors to `tty.handleIoctl(req, argp, &validateUserBuffer)`.
+   * Implement process group syscalls: `sysSetpgid(109)`, `sysGetpgrp(111)`, `sysGetpgid(121)`.
+   * Implement `sysPoll(7)` and `sysPpoll(271)` for TTY polling.
+5. **Step 5: Update `src/main.zig` and `scripts/verify_qemu.sh`:**
+   * In `src/main.zig` `kmain()`:
+     1. Emit `[TINUX_TEST] START: TASK-012\n`.
+     2. Initialize TTY subsystem via `tty.init();`.
+     3. Spawn interactive shell: `const argv = [_][]const u8{ "/bin/sh" };`.
+     4. Log `[TINUX_INIT] Spawning interactive shell PID 1 (/bin/sh)...\n`.
+   * In `scripts/verify_qemu.sh`, pipe interactive shell session into QEMU stdin:
+     ```bash
+     (
+         sleep 0.4
+         cat << 'EOF'
+     export TINUX_STAGE="Interactive-TTY-Ready"
+     echo "[TINUX_TTY] Operator session active: $TINUX_STAGE"
+     /bin/mkdir /tmp/ops
+     echo "Linux asset compatibility verified on Tinux!" > /tmp/ops/report.txt
+     /bin/cat /tmp/ops/report.txt | /bin/grep Tinux
+     /bin/dyn_inspect
+     /bin/ps
+     echo "[TINUX_OPS] All interactive Linux operations completed successfully!"
+     exit 0
+     EOF
+     ) | timeout "$TIMEOUT_SEC" qemu-system-x86_64 \
+         -kernel "$KERNEL_BIN" \
+         -nographic \
+         -no-reboot \
+         -serial stdio \
+         -monitor none \
+         -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+         > "$LOG_FILE" 2>&1
+     ```
 ---
 ## 6. Verification Harness & Pass Criteria
 ### 6.1 Verification Command
@@ -280,7 +258,7 @@ pub fn handleIoctl(req: usize, argp: usize, is_valid_buf_fn: *const fn (usize, u
 ./scripts/verify_qemu.sh TASK-012 10
 ```
 ### 6.2 Expected Output (Pass Criteria)
-QEMU output of and of executeoutput、 `verify_qemu.sh` Exit Code `0` with ：
+Verify that all expected serial logs are emitted and `verify_qemu.sh` exits with code `0`:
 ```text
 [TINUX_TEST] START: TASK-012
 [TINUX_INIT] Spawning interactive shell PID 1 (/bin/sh)...
@@ -295,16 +273,15 @@ Linux asset compatibility verified on Tinux!
 ```
 ---
 ## 7. Escalation Report Template (On 3rd Consecutive Failure)
-3 timesconsecutive with or `./scripts/verify_qemu.sh TASK-012 10` when、 Builder fixloop stop、 `ESCALATI
+If `zig build` or `./scripts/verify_qemu.sh TASK-012 10` fails 3 consecutive times, stop execution and generate `ESCALATION_REPORT.md`:
 ```markdown
 # Escalation Report: TASK-012
 ## 1. Failure Summary
-* **Failed Stage:** [zig build / IRQ4 Vector 36 Fault / TTY Read Deadlock / termios ioctl EFAULT / Interactive Stdin
-* **TTY & Task State Dump:** [tty.count, tty.newline_count, fg_pgid, and Task of pid, state, comm]
+* **Failed Stage:** [zig build / IRQ4 Vector 36 Fault / TTY Read Deadlock / termios ioctl EFAULT / Interactive Stdin]
+* **TTY & Task State Dump:** [tty.count, tty.newline_count, fg_pgid, and Task pid, state, comm]
 * **Attempt History:**
   * Attempt 1: [Changes attempted and observed outcome]
   * Attempt 2: [Changes attempted and observed outcome]
-
   * Attempt 3: [Changes attempted and observed outcome]
 ## 2. Exact Error / Serial Log Output
 ```text
@@ -312,7 +289,7 @@ Linux asset compatibility verified on Tinux!
 ```
 ## 3. Current Code Diff
 ```diff
-[Relevant code diff for src/drivers/tty.zig, src/proc/task.zig, src/syscall/dispatch.zig ]
+[Relevant code diff for src/drivers/tty.zig, src/proc/task.zig, src/syscall/dispatch.zig]
 ```
 ## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]

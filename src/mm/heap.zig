@@ -110,16 +110,10 @@ pub fn rawFree(ptr: [*]u8) void {
     coalesceFreeBlocks();
 }
 
-// Version-adaptive std.mem.Allocator VTable wrapper (supports Zig 0.13, 0.14, and 0.15+)
-const AllocFnType = @TypeOf(@as(std.mem.Allocator.VTable, undefined).alloc);
-const AlignParamType = @typeInfo(AllocFnType).@"fn".params[2].type.?;
+const AlignParamType = u8;
 
 inline fn alignParamToBytes(a: AlignParamType) usize {
-    if (AlignParamType == u8) {
-        return @as(usize, 1) << @intCast(a);
-    } else {
-        return a.toByteUnits();
-    }
+    return @as(usize, 1) << @intCast(a);
 }
 
 fn vtableAlloc(_: *anyopaque, len: usize, alignment: AlignParamType, _: usize) ?[*]u8 {

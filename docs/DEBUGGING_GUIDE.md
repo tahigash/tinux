@@ -1,15 +1,15 @@
 # Tinux Kernel Interactive Debugging Guide (`scripts/debug_gdb.sh` & `.vscode/launch.json`)
 > **Purpose:**
-> Provides single-command CLI debugging (`./scripts/debug_gdb.sh`) and one-click `F5` IDE debugging in **Google Anti
+> Provides single-command CLI debugging (`./scripts/debug_gdb.sh`) and one-click `F5` IDE debugging in Google Antigravity and VS Code.
 ---
-## 1. Key Technical Features
+## 1. Technical Architecture
 1. **Seamless 32-bit PVH to 64-bit Long Mode Transition:**
-   * QEMU starts the CPU in 32-bit mode at the Xen PVH entry point (`boot.S`) before switching to 64-bit Long Mode. 
-2. **Dual-Mode Operation (`CLI` & `--server-only` for IDE):**
-   * `./scripts/debug_gdb.sh`: Builds the kernel, boots QEMU in `-s -S` mode in the background, and automatically at
-   * `./scripts/debug_gdb.sh --server-only`: Starts QEMU waiting on `localhost:1234` so you can attach from Google A
+   * QEMU starts the CPU in 32-bit mode at the Xen PVH entry point (`boot.S`) before switching to 64-bit Long Mode.
+2. **Dual-Mode Operation (`CLI` and `--server-only` for IDE):**
+   * `./scripts/debug_gdb.sh`: Builds the kernel, boots QEMU in `-s -S` mode in the background, and automatically attaches GDB.
+   * `./scripts/debug_gdb.sh --server-only`: Starts QEMU waiting on `localhost:1234` so you can attach from Google Antigravity or VS Code via `launch.json`.
 3. **Custom Tinux GDB Macros:**
-   * Includes `tinux-tasks` (dumps the process table), `tinux-mmap` (shows QEMU virtual memory mappings via `monitor
+   * Includes `tinux-tasks` (dumps the process table), `tinux-mmap` (shows QEMU virtual memory mappings via `monitor info mem`), and `tinux-break-kmain`.
 ---
 ## 2. GDB Helper Script (`scripts/debug_gdb.sh`)
 Save the following code as `scripts/debug_gdb.sh` and make it executable (`chmod +x scripts/debug_gdb.sh`).
@@ -35,9 +35,6 @@ KERNEL_BIN="zig-out/bin/tinux"
 GDBINIT_FILE=".cache/tinux.gdbinit"
 DISK_IMG="/tmp/tinux_debug_disk.img"
 while [[ $# -gt 0 ]]; do
-
-
-130 ---
     case "$1" in
         --server-only|--wait)
             SERVER_ONLY=1
@@ -110,9 +107,6 @@ for candidate in gdb gdb-multiarch x86_64-elf-gdb x86_64-linux-gnu-gdb; do
         break
     fi
 done
-
-
-131 ---
 if [[ -z "$GDB_BIN" ]]; then
     echo -e "${RED}[ERROR]${NC} No GDB binary found (tried: gdb, gdb-multiarch, x86_64-elf-gdb)."
     echo -e "        Run './scripts/debug_gdb.sh --server-only' and attach from your IDE instead."
@@ -179,15 +173,12 @@ qemu-system-x86_64 "${QEMU_ARGS[@]}" > /tmp/tinux_gdb_serial.log 2>&1 &
 QEMU_PID=$!
 cleanup() {
     if kill -0 "$QEMU_PID" 2>/dev/null; then
-
-
-132 ---
         kill "$QEMU_PID" 2>/dev/null || true
     fi
 }
 trap cleanup EXIT INT TERM
 sleep 0.2
-echo -e "${GREEN}[DEBUG]${NC} Attaching ${CYAN}${GDB_BIN}${NC} (serial output logged to /tmp/tinux_gdb_serial.log)..
+echo -e "${GREEN}[DEBUG]${NC} Attaching ${CYAN}${GDB_BIN}${NC} (serial output logged to /tmp/tinux_gdb_serial.log)..."
 "$GDB_BIN" -q -x "$GDBINIT_FILE"
 ```
 ---
@@ -252,9 +243,6 @@ Save the following configuration as `.vscode/launch.json`:
   "version": "0.2.0",
   "configurations": [
     {
-
-
-133 ---
       "name": "Tinux Kernel: Build & Debug in QEMU (GDB)",
       "type": "cppdbg",
       "request": "launch",

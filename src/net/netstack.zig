@@ -45,9 +45,6 @@ pub const Ipv4Hdr = extern struct {
     saddr: [4]u8 align(1),
     daddr: [4]u8 align(1),
     comptime {
-
-
-154 ---
         std.debug.assert(@sizeOf(Ipv4Hdr) == 20);
     }
 };

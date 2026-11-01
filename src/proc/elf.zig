@@ -280,7 +280,7 @@ pub fn loadStaticElf(
     };
     var aux_bytes: [auxv_data.len * 8]u8 = undefined;
     for (auxv_data, 0..) |v, idx| {
-        std.mem.writeInt(u64, aux_bytes[idx * 8 .. (idx + 1) * 8], v, .little);
+        std.mem.writeInt(u64, aux_bytes[idx * 8 ..][0..8], v, .little);
     }
     _ = writeToUserVaddr(pml4_phys, auxv_sp, &aux_bytes);
 

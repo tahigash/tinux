@@ -50,9 +50,6 @@ pub fn rwSector(sector: u64, buf: *[SECTOR_SIZE]u8, is_write: bool) bool {
 }
 pub fn readBytes(offset: usize, dst: []u8) usize {
     // Builder reads arbitrary byte range across 512-byte sectors via rwSector(..., false)
-
-
-96 ---
 }
 pub fn writeBytes(offset: usize, src: []const u8) usize {
     // Builder performs read-modify-write or full-sector write across 512-byte sectors via rwSector(..., true)

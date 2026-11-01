@@ -8,8 +8,6 @@
 .equ MAILBOX_RSP,     0x8F08
 .equ MAILBOX_ENTRY,   0x8F10
 
-
-174 ---
 .align 16
 ap_trampoline_start:
     cli
@@ -75,9 +73,6 @@ ap_trampoline_start:
     hlt
     jmp .Lap_halt
 .align 16
-
-
-175 ---
 .Lap_gdt:
     .quad 0x0000000000000000    /* 0x00: Null descriptor */
     .quad 0x00CF9A000000FFFF    /* 0x08: 32-bit Kernel Code (DPL=0) */

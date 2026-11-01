@@ -1,4 +1,5 @@
 # Tinux Implementation Specification: TASK-018
+
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
 > * **Architect (Structure & Harness):** Gemini 4 Argon
 > * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
@@ -8,41 +9,41 @@
 ## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
 You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
- specification with definition `KernelSigAction` （ 32 bytes ）、 `SignalFrame` （ 160 bytes ）、signalcolumn、 and `del
-2. **Critical x86_64 Signal Handler Stack Alignment & Red Zone Rule （important ABI contract） :**
- System V AMD64 ABI with 、function（ `push %rbp` of execute） of `%rsp` must **`(rsp & 0xF) == 8`** （ 16 of − 8
-3. **Strict Zig Version Idioms （ Zig ⽂ of strictly adhere） :**
- must 1 of 「 Zig Idiom Cheat Sheet 」 、function ⼀use。
-4. **Compile-Time ABI & Hardware Invariants （ `comptime` of strictly adhere） :**
- 4 with `KernelSigAction` （ 32B ）、 `SignalFrame` （ 160B ）、 `LinuxItimerval` （ 32B ） of `comptime` ‧
-5. **3-Strike Escalation Protocol （ 3 timeson failure of stop） :**
- * or `./scripts/verify_qemu.sh TASK-018 10` **3 timesconsecutive with ** when、 **4 times⽬ of speculativefix ⾏
- * 3 times⽬ of `./scripts/triage_crash.py --out ESCALATION_REPORT.md` execute、 7 of 
+   Do not alter the `KernelSigAction` struct (32 bytes), `SignalFrame` struct (160 bytes), signal numbers, or delivery trampoline byte sequences.
+2. **Critical x86_64 Signal Handler Stack Alignment & Red Zone Rule:**
+   Under the System V AMD64 ABI, user stack frames must preserve the 128-byte red zone beneath `%rsp` and satisfy `(rsp & 0xF) == 8` immediately before the handler's entry `push %rbp`.
+3. **Strict Zig Version Idioms:**
+   Adhere strictly to modern Zig idioms (0.13+) as defined in Section 1. Do not use deprecated functions like `@ptrToInt` or `@intToPtr`.
+4. **Compile-Time ABI & Hardware Invariants:**
+   Assert exact sizes at compile time for `KernelSigAction` (32 bytes), `SignalFrame` (160 bytes), and `LinuxItimerval` (32 bytes).
+5. **3-Strike Escalation Protocol:**
+   * If `zig build` or `./scripts/verify_qemu.sh TASK-018 10` fails 3 consecutive times, do not make a 4th speculative guess.
+   * Stop immediately after the 3rd failure, generate `ESCALATION_REPORT.md` following Section 7, and halt execution.
 ---
-## 1. Zig Idiom Cheat Sheet (KernelFreestanding Rules)
+## 1. Zig Idiom Cheat Sheet (Kernel Freestanding Rules)
+Use modern Zig syntax (0.13 / 0.14 / 0.15+) exclusively to prevent compilation errors:
 | Operation | Deprecated (Prohibited) | Required (Modern Zig) |
 | :--- | :--- | :--- |
 | Pointer to integer | `@ptrToInt(ptr)` | `@intFromPtr(ptr)` |
 | Integer to pointer | `@intToPtr(*T, addr)` | `@as(*T, @ptrFromInt(addr))` |
-| | ⼿loop | `@ctz(mask)` |
-| signal | `1 << (sig - 1)` (typeerror) | `@as(u64, 1) << @intCast(sig - 1)` |
-| ⾮ 64bit | `@ptrCast(*u64, p).*` (`#GP`/Panic) | `std.mem.readInt(u64, @as(*const [8]u8, @ptrFromInt(
-| ↔ | `@bitCast(isize, val)` | `@as(isize, @bitCast(val))` |
+| Count trailing zeros | Manual bit scanning | `@ctz(mask)` |
+| Signal bit mask | `1 << (sig - 1)` | `@as(u64, 1) << @intCast(sig - 1)` |
+| Unaligned 64-bit read | `@ptrCast(*u64, p).*` | `std.mem.readInt(u64, @as(*const [8]u8, @ptrFromInt(p)), .little)` |
+| Bit cast signed/unsigned | `@bitCast(isize, val)` | `@as(isize, @bitCast(val))` |
 ---
 ## 2. Task Metadata & Scope
 * **Task ID:** `TASK-018`
-* **Title:** `User-Space Signal Delivery Mechanism (Signal Trampoline, rt_sigaction, rt_sigprocmask, rt_sigreturn, S
+* **Title:** `User-Space Signal Delivery Mechanism (Signal Trampoline, rt_sigaction, rt_sigprocmask, rt_sigreturn, SIGALRM/SIGCHLD, and Signal Frame Stack Alignment)`
 * **Target Subsystem:** `proc`, `drivers`, `syscall`, `user`
-
 * **Target Files to Create / Modify:**
-  * `src/proc/signal.zig` (Create: signal constants, `KernelSigAction`, `SignalFrame`, `sendSignal`, and `deliverPen
-  * `src/proc/task.zig` (Modify: add `WAITING_SIGNAL = 12`, per-task `sigactions`, `pending_signals`, `sig_mask`, `a
+  * `src/proc/signal.zig` (Create: signal constants, `KernelSigAction`, `SignalFrame`, `sendSignalToTask`, and `deliverPendingSignals`)
+  * `src/proc/task.zig` (Modify: add `WAITING_SIGNAL = 12`, per-task `sigactions`, `pending_signals`, `sig_mask`, `alarm_wake_tick`)
   * `src/drivers/timer.zig` (Modify: check `alarm_wake_tick` on each tick to queue `SIGALRM`)
   * `src/drivers/tty.zig` (Modify: send `SIGINT (2)` to foreground process group on `Ctrl+C` `0x03`)
-  * `src/syscall/dispatch.zig` (Modify: implement real `sys_rt_sigaction(13)`, `sys_rt_sigprocmask(14)`, `sys_rt_sig
-  * `src/user/sig_test.zig` (Create: standalone Linux `x86_64` verification binary testing `rt_sigaction`, `rt_sigpr
+  * `src/syscall/dispatch.zig` (Modify: implement `sys_rt_sigaction(13)`, `sys_rt_sigprocmask(14)`, `sys_rt_sigreturn(15)`, `sys_pause(34)`, `sys_alarm(37)`, `sys_setitimer(38)`)
+  * `src/user/sig_test.zig` (Create: standalone Linux `x86_64` verification binary testing `rt_sigaction`, `rt_sigprocmask`, timers, and signal returns)
   * `src/main.zig` (Modify: update test markers to `TASK-018`)
-  * `scripts/verify_qemu.sh` (Modify: compile `/bin/sig_test`, package into `initramfs.cpio`, and execute via intera
+  * `scripts/verify_qemu.sh` (Modify: compile `/bin/sig_test`, package into `initramfs.cpio`, and execute via interactive shell)
 * **Read-Only Reference Files:**
   * `src/arch/x86_64/syscall_entry.S`
   * `src/arch/x86_64/syscall.zig`
@@ -50,18 +51,18 @@ You are the **Implementation Builder**. Implement the requirements adhering stri
 ---
 ## 3. Hardware, Protocol & Linux ABI Contract (Opus 5.5 Audited)
 ### 3.1 Linux x86_64 `struct k_sigaction` & Signal Numbers Contract
-Linux x86_64 of `sys_rt_sigaction(sig, act, oact, sigsetsize)` `sigsetsize == 8` （ 64 mask） request、
+The Linux x86_64 `sys_rt_sigaction(sig, act, oact, sigsetsize)` syscall requires `sigsetsize == 8` (64-bit signal mask):
 | Field Name | Byte Offset | Size | Description & Flags |
 | :--- | :--- | :--- | :--- |
-| **`sa_handler`** | `0` | `8 B` (`usize`) | `0` = `SIG_DFL` （）、 `1` = `SIG_IGN` （）、 = Ring 3
-| **`sa_flags`** | `8` | `8 B` (`u64`) | `SA_RESTORER = 0x04000000` 、 `SA_SIGINFO = 0x00000004` 、 `SA_RESTART = 0x10000
-| **`sa_restorer`** | `16` | `8 B` (`usize`) | `SA_RESTORER` handler from of `retq` and function
-| **`sa_mask`** | `24` | `8 B` (`u64`) | handlerexecute add with blocksignal of mask（ Bit `sig - 1` ）。 |
-* ** signalnumber and (`SIG_DFL`):**
-  * `SIGINT (2)`, `SIGQUIT (3)`, `SIGILL (4)`, `SIGABRT (6)`, `SIGFPE (8)`, `SIGKILL (9)`, `SIGSEGV (11)`, `SIGPIPE 
- * `SIGCHLD (17)`, `SIGURG (23)`, `SIGWINCH (28)`: **Ignore （） ** 。
+| **`sa_handler`** | `0` | `8 B` (`usize`) | `0` = `SIG_DFL` (default), `1` = `SIG_IGN` (ignore), or Ring 3 function pointer. |
+| **`sa_flags`** | `8` | `8 B` (`u64`) | `SA_RESTORER = 0x04000000`, `SA_SIGINFO = 0x00000004`, `SA_RESTART = 0x10000000`, `SA_NODEFER = 0x40000000`. |
+| **`sa_restorer`** | `16` | `8 B` (`usize`) | User-space restorer trampoline address called upon signal return when `SA_RESTORER` is set. |
+| **`sa_mask`** | `24` | `8 B` (`u64`) | Additional signals to block during handler execution (bit `sig - 1`). |
+* **Standard Signal Dispositions (`SIG_DFL`):**
+  * `SIGINT (2)`, `SIGQUIT (3)`, `SIGILL (4)`, `SIGABRT (6)`, `SIGFPE (8)`, `SIGKILL (9)`, `SIGSEGV (11)`, `SIGPIPE (13)`, `SIGALRM (14)`, `SIGTERM (15)`, `SIGUSR1 (10)`, `SIGUSR2 (12)`: Terminate process.
+  * `SIGCHLD (17)`, `SIGURG (23)`, `SIGWINCH (28)`: Ignored by default.
 ### 3.2 User Stack `SignalFrame` Layout & Built-In Trampoline Contract
-signalhandler `sa_handler(signum)` Ring 3 with execute、 of 160 of `SignalFrame` stack
+When delivering a signal to a user handler `sa_handler(signum)` in Ring 3, the kernel constructs a 160-byte `SignalFrame` on the user stack:
 ```text
 High Address (Interrupted User RSP)
 +-------------------------------------------------------------------+
@@ -84,21 +85,20 @@ Low Address
    const raw_top = frame.user_rsp - 128 - @sizeOf(SignalFrame);
    const sigframe_vaddr = (raw_top & ~@as(usize, 0xF)) - 8;
    ```
- 、 `sigframe_vaddr` must `16n - 8` （ `sigframe_vaddr & 0xF == 8` ） and 、handlerfunction of `push %rbp` 
+   This ensures `sigframe_vaddr` satisfies `(sigframe_vaddr & 0xF) == 8`, meeting System V AMD64 ABI alignment rules after the handler executes `push %rbp`.
 2. **Trampoline Selection (`pretcode`):**
- * `sig_frame.trampoline` （virtual address `sigframe_vaddr + 8` ） 、 `48 c7 c0 0f 00 00 00 0f 05` （ `movq $1
- * `(act.sa_flags & SA_RESTORER) != 0 and act.sa_restorer != 0` with `sig_frame.pretcode = act.sa_restorer
- * taskstruct of `cur.last_sigframe_vaddr = sigframe_vaddr` 、 `sys_rt_sigreturn(15)` `cur
+   * If `(act.sa_flags & SA_RESTORER) != 0 and act.sa_restorer != 0`, set `pretcode = act.sa_restorer`.
+   * Otherwise, set `pretcode = sigframe_vaddr + 8`, pointing directly to the self-contained restorer code in `trampoline`.
+   * Record `cur.last_sigframe_vaddr = sigframe_vaddr` so `sys_rt_sigreturn(15)` knows where to unpack the saved state.
 ### 3.3 Signal System Calls Contract
 | Syscall Name | Num | Arguments | Exact Return Value & `-Errno` Edge Cases |
 | :--- | :--- | :--- | :--- |
-| **`sys_rt_sigaction`** | `13` | `sig, act_ptr, oact_ptr, sigsetsize` | `sig == 0 or sig > 64 or sig == 9 or sig ==
-| **`sys_rt_sigprocmask`** | `14` | `how, set_ptr, oset_ptr, sigsetsize` | `sigsetsize != 8` `-EINVAL` 。 `oset_pt
-| **`sys_rt_sigreturn`** | `15` | (none) | `cur.last_sigframe_vaddr` from `SignalFrame` 、 `cur.sig_mask = sf
-| **`sys_pause`** | `34` | (none) | mask of signal `frame.rax = @bitCast(toReturn(.EINTR))` and 
-| **`sys_alarm`** | `37` | `seconds: usize` | `seconds == 0` `cur.alarm_wake_tick = 0` 。 `seconds > 0` `cur.
-| **`sys_setitimer`** | `38` | `which, new_val_ptr, old_val_ptr` | `new_val_ptr` (`LinuxItimerval`, 32B: `it_interva
-
+| **`sys_rt_sigaction`** | `13` | `sig, act_ptr, oact_ptr, sigsetsize` | If `sig == 0 or sig > 64 or sig == 9 or sig == 19`, return `-EINVAL`. If `sigsetsize != 8`, return `-EINVAL`. If `oact_ptr != 0`, write current action. If `act_ptr != 0`, set action. Returns 0. |
+| **`sys_rt_sigprocmask`** | `14` | `how, set_ptr, oset_ptr, sigsetsize` | If `sigsetsize != 8`, return `-EINVAL`. If `oset_ptr != 0`, write old mask. Modify `cur.sig_mask` according to `SIG_BLOCK`, `SIG_UNBLOCK`, `SIG_SETMASK`. Preserves unmaskable signals (`SIGKILL`, `SIGSTOP`). Returns 0. |
+| **`sys_rt_sigreturn`** | `15` | (none) | Restore `SyscallFrame` and signal mask from `cur.last_sigframe_vaddr`. Returns restored register state. |
+| **`sys_pause`** | `34` | (none) | Suspend task until an unmasked signal arrives. Returns `-EINTR (-4)`. |
+| **`sys_alarm`** | `37` | `seconds: usize` | If `seconds == 0`, cancel alarm. If `seconds > 0`, set `cur.alarm_wake_tick = timer.getTicks() + seconds * 100`. Returns remaining seconds from previous alarm. |
+| **`sys_setitimer`** | `38` | `which, new_val_ptr, old_val_ptr` | Configure interval timer from `LinuxItimerval` (32 bytes: `it_interval` and `it_value`). Returns 0. |
 ---
 ## 4. Exact Data Structures & Signatures
 ### 4.1 `src/proc/signal.zig`
@@ -165,8 +165,6 @@ pub const LinuxItimerval = extern struct {
         std.debug.assert(@sizeOf(LinuxItimerval) == 32);
     }
 };
-
-// x86_64 machine code: movq $15, %rax ; syscall ; nop...
 pub const TRAMPOLINE_BYTES: [16]u8 = .{
     0x48, 0xC7, 0xC0, 0x0F, 0x00, 0x00, 0x00, // movq $15, %rax (SYS_rt_sigreturn)
     0x0F, 0x05,                               // syscall
@@ -183,8 +181,8 @@ pub fn restoreSignalFrame(frame: *SyscallFrame) *SyscallFrame {
     // Builder restores SyscallFrame and sig_mask from cur.last_sigframe_vaddr
 }
 ```
-### 4.2 `src/user/sig_test.zig` (Standalone Linux `x86_64` Signal Verification Binary)
-Create `src/user/sig_test.zig` with the following implementation:
+### 4.2 `src/user/sig_test.zig` (Verification Binary)
+Create `src/user/sig_test.zig`:
 ```zig
 const std = @import("std");
 const SIGUSR1: usize = 10;
@@ -232,7 +230,6 @@ inline fn syscall1(num: usize, a1: usize) isize {
         : "rcx", "r11", "memory"
     );
 }
-
 inline fn syscall2(num: usize, a1: usize, a2: usize) isize {
     return asm volatile ("syscall"
         : [ret] "={rax}" (-> isize),
@@ -274,7 +271,6 @@ var usr1_count: usize = 0;
 var alrm_count: usize = 0;
 var chld_count: usize = 0;
 export fn signalHandler(signum: usize) callconv(.C) void {
-    // Verify 16-byte stack alignment inside C signal handler
     var local_aligned: [16]u8 align(16) = [_]u8{0} ** 16;
     local_aligned[0] = @truncate(signum);
     if ((@intFromPtr(&local_aligned) & 0xF) != 0) failExit(99);
@@ -296,29 +292,24 @@ export fn sigTestMain() callconv(.C) noreturn {
         .sa_restorer = @intFromPtr(&sigRestorer),
         .sa_mask = 0,
     };
-    // 1. Register handlers for SIGUSR1 (10), SIGALRM (14), SIGCHLD (17)
     if (syscall4(13, SIGUSR1, @intFromPtr(&act), 0, 8) != 0) failExit(10);
     if (syscall4(13, SIGALRM, @intFromPtr(&act), 0, 8) != 0) failExit(11);
     if (syscall4(13, SIGCHLD, @intFromPtr(&act), 0, 8) != 0) failExit(12);
-    // 2. Test sigprocmask (SIG_BLOCK -> kill -> verify blocked -> SIG_UNBLOCK -> delivered!)
-
     var mask: u64 = (@as(u64, 1) << (SIGUSR1 - 1));
     if (syscall4(14, SIG_BLOCK, @intFromPtr(&mask), 0, 8) != 0) failExit(13);
     const pid = syscall0(39); // getpid
     if (syscall2(62, @intCast(pid), SIGUSR1) != 0) failExit(14);
-    if (@atomicLoad(usize, &usr1_count, .seq_cst) != 0) failExit(15); // Must still be blocked!
+    if (@atomicLoad(usize, &usr1_count, .seq_cst) != 0) failExit(15);
     if (syscall4(14, SIG_UNBLOCK, @intFromPtr(&mask), 0, 8) != 0) failExit(16);
-    if (@atomicLoad(usize, &usr1_count, .seq_cst) != 1) failExit(17); // Must have fired on unblock!
-    // 3. Test setitimer(ITIMER_REAL) + pause() -> SIGALRM delivery -> rt_sigreturn -> -EINTR
+    if (@atomicLoad(usize, &usr1_count, .seq_cst) != 1) failExit(17);
     var itimer = LinuxItimerval{};
     if (syscall3(38, 0, @intFromPtr(&itimer), 0) != 0) failExit(18);
     const pause_rc = syscall0(34); // sys_pause()
-    if (pause_rc != -4) failExit(19); // Expect -EINTR (-4)
+    if (pause_rc != -4) failExit(19);
     if (@atomicLoad(usize, &alrm_count, .seq_cst) != 1) failExit(20);
-    // 4. Test SIGCHLD delivery on child process exit
     const child_pid = syscall0(57); // sys_fork()
     if (child_pid == 0) {
-        _ = syscall1(60, 0); // Child exits immediately
+        _ = syscall1(60, 0);
         unreachable;
     }
     var status: i32 = 0;
@@ -331,84 +322,48 @@ export fn sigTestMain() callconv(.C) noreturn {
 ```
 ---
 ## 5. Step-by-Step Implementation Logic & State Transitions
-1. **Step 1: `src/proc/task.zig` of signalstate **
- * `TaskState` `WAITING_SIGNAL = 12` add。
- * `Task` struct of add：
+1. **Step 1: Add Signal State to `src/proc/task.zig`:**
+   * Add `WAITING_SIGNAL = 12` to `TaskState`.
+   * Add fields to `Task` struct:
      * `sigactions: [65]signal.KernelSigAction = [_]signal.KernelSigAction{.{}} ** 65`
      * `pending_signals: u64 = 0`
      * `sig_mask: u64 = 0`
      * `in_signal_handler: bool = false`
      * `last_sigframe_vaddr: usize = 0`
      * `alarm_wake_tick: u64 = 0`
- * `forkCurrentTask` / `cloneCurrentTask` 、⼦taskparent of `sigactions` and `sig_mask` 、 `pending_signa
- * `sysExecve` 、 POSIX contract 、handler `sigactions` `SIG_DFL` 
- * `task.wakeSleepingTasks(now_ticks: u64)` （ or `timer.onTick()` ）：
- * task `t` 、 `t.state !=.UNUSED and t.alarm_wake_tick != 0 and now_ticks >= t.alarm_wake_tick` with 
- * `task.scheduleNextOrWait()` ：
- * `.WAITING_SLEEP` `.WAITING_TTY` and 、 `.WAITING_SIGNAL` （ or `alarm_wake_tick != 0` ） of taskexists
-2. **Step 2: `src/proc/signal.zig` Implementation **
-   * `sendSignalToTask(t: *task.Task, sig: usize) void`:
-     1. `if (sig == 0 or sig > 64 or t.state == .UNUSED or t.state == .ZOMBIE) return;`
-     2. `const bit = @as(u64, 1) << @intCast(sig - 1);`
-     3. `t.pending_signals |= bit;`
- 4. `(bit & ~t.sig_mask) != 0` with 、 `t.state ==.WAITING_SIGNAL or t.state ==.WAITING_SLEEP` with 
-   * `deliverPendingSignals(frame: *SyscallFrame) *SyscallFrame`:
-     1. `const cur = task.currentTask();`
- 2. `if (cur.in_signal_handler) return frame;` （⽌）。
-     3. `while (true)`:
-        * `const deliverable = cur.pending_signals & ~cur.sig_mask;`
-        * `if (deliverable == 0) return frame;`
-        * `const bit_idx: usize = @ctz(deliverable);`
-        * `const sig: usize = bit_idx + 1;`
-        * `cur.pending_signals &= ~(@as(u64, 1) << @intCast(bit_idx));`
-        * `const act = cur.sigactions[sig];`
-        * `if (act.sa_handler == SIG_IGN) continue;`
-        * `if (act.sa_handler == SIG_DFL)`:
- * `if (sig == SIGCHLD or sig == SIGCONT or sig == 23 or sig == 28) continue;` （）。
- * of exitsignal（ `SIGINT`, `SIGTERM`, `SIGKILL`, `SIGALRM`, `SIGUSR1` ） with `cur.pid > 1` 
- * ** handler（ `act.sa_handler > 1` ） of delivery :**
-          1. `const raw_top = frame.user_rsp - 128 - @sizeOf(SignalFrame);`
-
-          2. `const sigframe_vaddr = (raw_top & ~@as(usize, 0xF)) - 8;`
-          3. `const restorer = if ((act.sa_flags & SA_RESTORER) != 0 and act.sa_restorer != 0) act.sa_restorer else 
-          4. `var sf = SignalFrame{ .pretcode = restorer, .trampoline = TRAMPOLINE_BYTES, .saved_sigmask = cur.sig_m
- 5. stack（ `sigframe_vaddr` ） of `vmm.translate(cur.pml4_phys,...)` （ or Identity M
-          6. `cur.last_sigframe_vaddr = sigframe_vaddr;`
-          7. `cur.in_signal_handler = true;`
-          8. `if ((act.sa_flags & SA_NODEFER) == 0) cur.sig_mask |= (@as(u64, 1) << @intCast(bit_idx));`
-          9. `cur.sig_mask |= (act.sa_mask & ~UNMASKABLE_SIGNALS);`
-          10. `frame.user_rip = act.sa_handler;`
-          11. `frame.user_rsp = sigframe_vaddr;`
- 12. `frame.rdi = sig;` （ 1 arguments `signum` ）
-          13. `frame.rsi = 0;`
-          14. `frame.rdx = 0;`
-          15. `return frame;`
-   * `restoreSignalFrame(frame: *SyscallFrame) *SyscallFrame`:
-     1. `const cur = task.currentTask();`
-     2. `const sf_vaddr = if (cur.last_sigframe_vaddr != 0) cur.last_sigframe_vaddr else (frame.user_rsp - 8);`
-     3. `const sf = @as(*align(1) const SignalFrame, @ptrFromInt(sf_vaddr)).*;`
-     4. `cur.sig_mask = sf.saved_sigmask & ~UNMASKABLE_SIGNALS;`
-     5. `cur.in_signal_handler = false;`
-     6. `cur.last_sigframe_vaddr = 0;`
-     7. `frame.* = sf.saved_regs;`
-     8. `return frame;`
-3. **Step 3: `src/syscall/dispatch.zig` and `SIGCHLD` / `Ctrl+C` of **
- * `sysExit` / `sysExitGroup` 、⼦process（ `cur.pid > 1 and !cur.is_thread` ）exit `.ZOMBIE` 、parent
- * `sysKill` (62) / `sysTkill` (200) / `sysTgkill` (234) ：
- * `sig == 9 (SIGKILL)` of when exit。
- * of `sig >= 1 and sig <= 64` 、task `sigactions[sig].sa_handler > 1` （
- * `syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame` of with 、must **`return signal.del
-4. **Step 4: `src/main.zig` and `scripts/verify_qemu.sh` of update **
- * `src/main.zig` of start `[TINUX_TEST] START: TASK-018\n` 、 PASS `[TINUX_TEST] PASS: TASK-018\n` 
- * `scripts/verify_qemu.sh` with ：
-     1. `zig build-exe src/user/sig_test.zig -target x86_64-linux-none -O ReleaseSmall -fno-pie -femit-bin=.cache/in
- 2. type（ `/bin/sh` ） to of column ⼊：
-        ```sh
-        echo "[TINUX_SH] Running user-space signal delivery & rt_sigreturn test suite..."
-        /bin/sig_test
-        echo "[TINUX_SIGNAL] POSIX signal delivery (rt_sigaction/sigprocmask/setitimer/SIGCHLD/rt_sigreturn) verifie
-        exit 0
-        ```
+   * In `forkCurrentTask` / `cloneCurrentTask`, inherit parent's `sigactions` and `sig_mask`. Clear `pending_signals`.
+   * In `sysExecve`, reset custom signal handlers to `SIG_DFL`.
+   * In `timer.onTick()`, check if `now_ticks >= t.alarm_wake_tick` and queue `SIGALRM` via `signal.sendSignalToTask(t, signal.SIGALRM)`.
+2. **Step 2: Implement Signal Delivery in `src/proc/signal.zig`:**
+   * In `sendSignalToTask(t, sig)`:
+     1. Validate signal: if `sig == 0 or sig > 64`, return.
+     2. Set bit: `t.pending_signals |= (@as(u64, 1) << @intCast(sig - 1));`.
+     3. If signal is unmasked and task is in `.WAITING_SIGNAL` or `.WAITING_SLEEP`, transition task to `.READY`.
+   * In `deliverPendingSignals(frame)`:
+     1. If `cur.in_signal_handler`, return frame immediately to prevent reentrant handler recursion.
+     2. Calculate deliverable signals: `const deliverable = cur.pending_signals & ~cur.sig_mask;`. If 0, return frame.
+     3. Identify lowest pending signal via `@ctz(deliverable)`. Clear pending bit.
+     4. Retrieve registered action: `const act = cur.sigactions[sig];`.
+     5. If `act.sa_handler == SIG_IGN`, continue to next signal.
+     6. If `act.sa_handler == SIG_DFL`: terminate task if default action is terminate; ignore if default is ignore (`SIGCHLD`, `SIGWINCH`).
+     7. If `act.sa_handler > 1` (custom user handler):
+        * Compute aligned frame address: `const sigframe_vaddr = ((frame.user_rsp - 128 - @sizeOf(SignalFrame)) & ~@as(usize, 0xF)) - 8;`.
+        * Build `SignalFrame` on user stack containing `pretcode`, `trampoline` bytes, `cur.sig_mask`, and saved `frame.*`.
+        * Set `cur.last_sigframe_vaddr = sigframe_vaddr; cur.in_signal_handler = true;`.
+        * Apply `act.sa_mask` to `cur.sig_mask`.
+        * Set `frame.user_rip = act.sa_handler; frame.user_rsp = sigframe_vaddr; frame.rdi = sig;`.
+        * Return updated frame.
+   * In `restoreSignalFrame(frame)`:
+     1. Retrieve `SignalFrame` from `cur.last_sigframe_vaddr`.
+     2. Restore `cur.sig_mask` from `sf.saved_sigmask`.
+     3. Set `cur.in_signal_handler = false; cur.last_sigframe_vaddr = 0;`.
+     4. Restore `frame.* = sf.saved_regs; return frame;`.
+3. **Step 3: Wire Signals in `src/syscall/dispatch.zig`:**
+   * On child process exit in `sysExit` / `sysExitGroup`, queue `SIGCHLD` to parent task via `signal.sendSignalToTask(parent, signal.SIGCHLD)`.
+   * In `sysKill(62)`, find target process and dispatch signal.
+   * In `syscallDispatch(frame)`, before returning to Ring 3, call `return signal.deliverPendingSignals(frame);`.
+4. **Step 4: Update `src/main.zig` and `scripts/verify_qemu.sh`:**
+   * In `scripts/verify_qemu.sh`, compile `sig_test.zig`, package into initramfs, and run verification.
 ---
 ## 6. Verification Harness & Pass Criteria
 ### 6.1 Verification Command
@@ -432,24 +387,23 @@ Verify that all expected serial logs are emitted and `verify_qemu.sh` exits with
 ```
 ---
 ## 7. Escalation Report Template (On 3rd Consecutive Failure)
-3 timesconsecutive with or `./scripts/verify_qemu.sh TASK-018 10` when、 Builder fixloop stop、 `./script
+If `zig build` or `./scripts/verify_qemu.sh TASK-018 10` fails 3 consecutive times, stop execution and generate `ESCALATION_REPORT.md`:
 ```markdown
-
 # Escalation Report: TASK-018
 ## 1. Failure Summary
-* **Failed Stage:** [zig build / Signal Handler #GP (16B Alignment Error) / Trampoline #PF / rt_sigreturn Frame Rest
-* **Signal & Task State Dump:** [pending_signals, sig_mask, last_sigframe_vaddr, alarm_wake_tick, sig_test exit code
+* **Failed Stage:** [zig build / Signal Handler #GP (16B Alignment Error) / Trampoline #PF / rt_sigreturn Frame Restore Error]
+* **Signal & Task State Dump:** [pending_signals, sig_mask, last_sigframe_vaddr, alarm_wake_tick, sig_test exit code]
 * **Attempt History:**
   * Attempt 1: [Changes attempted and observed outcome]
   * Attempt 2: [Changes attempted and observed outcome]
   * Attempt 3: [Changes attempted and observed outcome]
 ## 2. Automated Crash Triage & Serial Log Output
 ```text
-[scripts/triage_crash.py of output and /tmp/tinux_qemu_TASK-018.log of ⽂ ]
+[Full build error output, or full contents of /tmp/tinux_qemu_*.log]
 ```
 ## 3. Current Code Diff
 ```diff
-[Relevant code diff for src/proc/signal.zig, src/proc/task.zig, src/syscall/dispatch.zig ]
+[Relevant code diff for src/proc/signal.zig, src/proc/task.zig, src/syscall/dispatch.zig]
 ```
 ## 4. Suspected Root Cause (For Argon / Opus 5.5 Review)
 * [Hypothesis on root cause from Builder perspective (1-3 lines)]

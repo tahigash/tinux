@@ -38,8 +38,6 @@ pub var rx_bytes: u64 = 0;
 pub var tx_packets: u64 = 0;
 pub var tx_bytes: u64 = 0;
 
-
-153 ---
 pub fn init() bool {
     // Builder probes PCI 1AF4:1000, negotiates VIRTIO_NET_F_MAC, reads mac_addr,
     // sets up Queue 0 (RXQ) with 16 pre-posted buffers and Queue 1 (TXQ), sets DRIVER_OK

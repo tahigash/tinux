@@ -19,9 +19,6 @@ KERNEL_BIN="zig-out/bin/tinux"
 GDBINIT_FILE=".cache/tinux.gdbinit"
 DISK_IMG="/tmp/tinux_debug_disk.img"
 while [[ $# -gt 0 ]]; do
-
-
-130 ---
     case "$1" in
         --server-only|--wait)
             SERVER_ONLY=1
@@ -80,7 +77,7 @@ QEMU_ARGS=(
 if [[ "$SERVER_ONLY" -eq 1 ]]; then
     # Kill any stale QEMU listening on GDB_PORT
     pkill -f "qemu-system-x86_64.*tcp::${GDB_PORT}" 2>/dev/null || true
-    echo -e "${GREEN}[DEBUG]${NC} Starting QEMU GDB server on ${CYAN}localhost:${GDB_PORT}${NC} (CPU paused with -S)
+    echo -e "${GREEN}[DEBUG]${NC} Starting QEMU GDB server on ${CYAN}localhost:${GDB_PORT}${NC} (CPU paused with -S)..."
     echo -e "${YELLOW}[DEBUG]${NC} Press F5 in VS Code / Google Antigravity to attach, or Ctrl+C to stop."
     exec qemu-system-x86_64 "${QEMU_ARGS[@]}"
 fi
@@ -94,9 +91,6 @@ for candidate in gdb gdb-multiarch x86_64-elf-gdb x86_64-linux-gnu-gdb; do
         break
     fi
 done
-
-
-131 ---
 if [[ -z "$GDB_BIN" ]]; then
     echo -e "${RED}[ERROR]${NC} No GDB binary found (tried: gdb, gdb-multiarch, x86_64-elf-gdb)."
     echo -e "        Run './scripts/debug_gdb.sh --server-only' and attach from your IDE instead."
@@ -163,13 +157,10 @@ qemu-system-x86_64 "${QEMU_ARGS[@]}" > /tmp/tinux_gdb_serial.log 2>&1 &
 QEMU_PID=$!
 cleanup() {
     if kill -0 "$QEMU_PID" 2>/dev/null; then
-
-
-132 ---
         kill "$QEMU_PID" 2>/dev/null || true
     fi
 }
 trap cleanup EXIT INT TERM
 sleep 0.2
-echo -e "${GREEN}[DEBUG]${NC} Attaching ${CYAN}${GDB_BIN}${NC} (serial output logged to /tmp/tinux_gdb_serial.log)..
+echo -e "${GREEN}[DEBUG]${NC} Attaching ${CYAN}${GDB_BIN}${NC} (serial output logged to /tmp/tinux_gdb_serial.log)..."
 "$GDB_BIN" -q -x "$GDBINIT_FILE"

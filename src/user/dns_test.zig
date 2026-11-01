@@ -6,9 +6,6 @@ const SockAddrIn = extern struct {
     sin_family: u16 = AF_INET,
     sin_port: u16 = 0, // Big Endian
     sin_addr: [4]u8 = .{ 0, 0, 0, 0 },
-
-
-168 ---
     sin_zero: [8]u8 = [_]u8{0} ** 8,
     comptime {
         std.debug.assert(@sizeOf(SockAddrIn) == 16);
@@ -78,9 +75,6 @@ fn writeStdout(msg: []const u8) void {
 }
 fn failExit(code: usize) noreturn {
     _ = syscall1(231, code);
-
-
-169 ---
     unreachable;
 }
 export fn dnsTestMain() callconv(.C) noreturn {
@@ -151,9 +145,6 @@ export fn dnsTestMain() callconv(.C) noreturn {
         0,
         @intFromPtr(&dns_from),
         @intFromPtr(&dns_from_len),
-
-
-170 ---
     );
     if (resp_len < 33) failExit(19);
     // Verify Transaction ID (0x42, 0x24), QR=1 (Response bit 0x80 in byte 2), and ANCOUNT >= 1

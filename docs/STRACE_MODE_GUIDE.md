@@ -176,7 +176,7 @@ To enable tracing during kernel initialization, call `strace.init(true)` in `src
 
 ## 4. Sample Output
 
-Running `ls /tmp` in BusyBox `/bin/sh` produces:
+Running `ls /tmp` in the clean-room micro-userland `/bin/sh` produces:
 
 ```text
 [strace pid=2] execve(0x00807000, 0x00807200, 0x00807400, 0x0, 0x0, 0x0) = 0

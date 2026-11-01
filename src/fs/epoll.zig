@@ -31,9 +31,6 @@ pub const EpollInstance = struct {
     in_use: bool = false,
     ref_count: usize = 0,
     items: [MAX_EPOLL_ITEMS]EpollItem = [_]EpollItem{.{}} ** MAX_EPOLL_ITEMS,
-
-
-88 ---
 };
 var instances: [MAX_EPOLL_INSTANCES]EpollInstance = [_]EpollInstance{.{}} ** MAX_EPOLL_INSTANCES;
 pub fn init() void {

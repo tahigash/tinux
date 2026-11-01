@@ -61,8 +61,6 @@ pub const LinuxItimerval = extern struct {
     }
 };
 
-
-161 ---
 // x86_64 machine code: movq $15, %rax ; syscall ; nop...
 pub const TRAMPOLINE_BYTES: [16]u8 = .{
     0x48, 0xC7, 0xC0, 0x0F, 0x00, 0x00, 0x00, // movq $15, %rax (SYS_rt_sigreturn)

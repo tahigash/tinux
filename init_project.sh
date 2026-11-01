@@ -24,9 +24,6 @@ for cmd in zig qemu-system-x86_64 cpio tar git python3; do
 done
 DIRS=(
     "docs/specs"
-
-
-181 ---
     "scripts"
     "tools"
     "src/arch/x86_64"
@@ -74,7 +71,7 @@ for num in $(seq -f "%03g" 1 20); do
     if [ ! -f "$SPEC_FILE" ]; then
         cat << SPEC_EOF > "$SPEC_FILE"
 # Tinux Implementation Specification: TASK-${num}
-> **STATUS: PLACEHOLDER — PASTE FULL SPECIFICATION FOR TASK-${num} HERE**
+> **STATUS: PLACEHOLDER: PASTE FULL SPECIFICATION FOR TASK-${num} HERE**
 > * **Title:** ${TASK_TITLES[$num]}
 SPEC_EOF
         log_warn "Created placeholder: $SPEC_FILE"

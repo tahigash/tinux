@@ -1,0 +1,23 @@
+# Normalize line endings: store LF in the repository and check out LF everywhere.
+# Shell scripts, linker scripts, and assembly must keep LF to run under bash and Zig.
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.S     text eol=lf
+*.ld    text eol=lf
+*.zig   text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.c     text eol=lf
+*.rs    text eol=lf
+
+# Binary artifacts (should never be committed, but mark them just in case)
+*.cpio   binary
+*.elf    binary
+*.bin    binary
+*.img    binary
+*.qcow2  binary
+*.iso    binary
+*.png    binary
+*.jpg    binary

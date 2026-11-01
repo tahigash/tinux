@@ -1,36 +1,34 @@
 # Tinux Implementation Specification: TASK-002
-
 > **Document Status:** APPROVED FOR BUILDER EXECUTION
 > * **Architect (Structure & Harness):** Gemini 4 Argon
 > * **Auditor (Low-Level & ABI Contract):** Claude Opus 5.5
 > * **Target Builder:** Gemini 3.8 Flash High (via Google Antigravity)
-> * **Prerequisite:** `TASK-001` Passed (`./scripts/verify_qemu.sh TASK-001 5` == Exit Code 0)
 ---
-## 0. Builder Agent Operating Rules (For Gemini 3.8 Flash High)
-You are the **Implementation Builder**. Implement the requirements adhering strictly to these rules:
+## 0. Builder Agent Operating Rules
+You are the Implementation Builder. Implement the requirements adhering strictly to these rules:
 1. **No Architectural Improvisation:**
- specification with definition GDT 、 `TrapFrame` of 、 IDT 、 PMM of bitmap⽅ with 
+   Do not alter the specified GDT layout, `TrapFrame` struct layout, IDT gate configurations, or PMM bitmap allocation policies.
 2. **Strict Zig Version Idioms:**
- must 1 of 「 Zig Idiom Cheat Sheet 」 、function（ `@ptrToInt` ） ⼀use。
-3. **Preserve Existing Boot Flow （ of ） :**
- `TASK-001` with create `boot.S` and `serial.zig` of 、。
+   Do not output deprecated Zig idioms (0.10/0.11 era). Adhere strictly to Section 1 "Zig Idiom Cheat Sheet".
+3. **Preserve Existing Boot Flow:**
+   Do not modify `src/arch/x86_64/boot.S` or `src/drivers/serial.zig` logic established in TASK-001, except where explicitly instructed.
 4. **3-Strike Escalation Protocol:**
- * or `./scripts/verify_qemu.sh TASK-002 5` **3 timesconsecutive with ** when、 **4 times⽬ of speculativefix ⾏
-   * Stop immediately after the 3rd failure, generate `ESCALATION_REPORT.md` following Section 7, and halt execution.
+   * If `zig build` or `./scripts/verify_qemu.sh TASK-002 5` fails three consecutive times, do not make a fourth speculative guess.
+   * Stop immediately after the third failure, generate `ESCALATION_REPORT.md` following Section 7, and halt execution.
 ---
-## 1. Zig Idiom Cheat Sheet (KernelFreestanding Rules)
+## 1. Zig Idiom Cheat Sheet (Kernel Freestanding Rules)
 | Operation | Deprecated (Prohibited) | Required (Modern Zig) |
 | :--- | :--- | :--- |
 | Pointer to integer | `@ptrToInt(ptr)` | `@intFromPtr(ptr)` |
 | Integer to pointer | `@intToPtr(*T, addr)` | `@as(*T, @ptrFromInt(addr))` |
 | Bit cast | `@bitCast(DestType, val)` | `@as(DestType, @bitCast(val))` |
-| referenced | `extern var __kernel_end: u8;` (valuereferenced) | `@intFromPtr(&__kernel_end)` |
-| LGDT / LIDT 10 struct | `extern struct { limit: u16, base: u64 }` (⼊) | `[10]u8 align(16)` `st
-| memoryzerocleared | loop⼿ | `@memset(slice, 0)` |
+| Symbol address | `extern var __kernel_end: u8;` (dereferencing value) | `@intFromPtr(&__kernel_end)` |
+| LGDT / LIDT descriptor | `extern struct { limit: u16, base: u64 }` (unaligned) | `[10]u8 align(16)` descriptor buffer |
+| Memory zero fill | Manual loop | `@memset(slice, 0)` |
 ---
 ## 2. Task Metadata & Scope
 * **Task ID:** `TASK-002`
-* **Title:** `x86_64 GDT/TSS Reconstruction, IDT Exception Handlers (Page Fault / Register Dump), and Physical Page 
+* **Title:** `x86_64 GDT/TSS Reconstruction, IDT Exception Handlers (Page Fault / Register Dump), and Physical Page Frame Allocator (PMM)`
 * **Target Subsystem:** `arch/x86_64`, `mm`, `drivers/serial`
 * **Target Files to Create / Modify:**
   * `linker.ld` (Modify: export `__kernel_start` and `__kernel_end`)
@@ -44,7 +42,7 @@ You are the **Implementation Builder**. Implement the requirements adhering stri
 ---
 ## 3. Hardware & Low-Level Contract (Opus 5.5 Audited)
 ### 3.1 GDT Layout (Future `SYSCALL` / `SYSRET` Ready)
-x86_64 of `SYSRET` 、 `IA32_STAR` MSR of 16 、 `+8` User Data (`SS`) 、 `+16`
+To ensure compatibility with subsequent `SYSRET` instructions, user segment descriptors must follow kernel selectors in the order required by `IA32_STAR`:
 | Index | Selector | Segment Role | Descriptor Value (`u64`) |
 | :--- | :--- | :--- | :--- |
 | `0` | `0x00` | Null Descriptor | `0x0000000000000000` |
@@ -54,17 +52,17 @@ x86_64 of `SYSRET` 、 `IA32_STAR` MSR of 16 、 `+8` User Data (`SS`) 、 `+16`
 | `4` | `0x20` | User Code (64-bit, DPL=3) | `0x0020FA0000000000` |
 | `5..6` | `0x28` | 64-bit TSS Descriptor (16 bytes) | Dynamic (Base = `&tss`, Limit = `103`, Type = `0x89`) |
 ### 3.2 CPU Exception Stack Frame & 16-Byte Alignment Contract
-x86_64 with interrupt⽣、 CPU ⾃ with `RSP` 16 boundary from `SS, RSP, RFLAGS, CS, RIP` （ 5 × 8 = 40 byte
-* ** error ⾃exceptionvector :** `8 (#DF)`, `10 (#TS)`, `11 (#NP)`, `12 (#SS)`, `13 (#GP)`, `14 (#PF)`, `
-* ** of vector（ `0..31` ） :** `isr.S` with of `pushq $0` ⾏、stack complete ⼀。
-* **16 boundary of :** CPU （ 40 bytes ）＋ `error_code` & `vector` （ 16 bytes ）＋ ⽤register 15 （ 120 bytes ）＝ 
-
+When an x86_64 CPU exception occurs, the hardware automatically pushes `SS, RSP, RFLAGS, CS, RIP` (5 * 8 = 40 bytes) onto the target stack.
+* **Exceptions with an error code pushed automatically:** `8 (#DF)`, `10 (#TS)`, `11 (#NP)`, `12 (#SS)`, `13 (#GP)`, `14 (#PF)`, `17 (#AC)`, `21 (#CP)`, `29 (#VC)`, `30 (#SX)`.
+* **Exceptions without an error code (`0..31`):** `isr.S` executes `pushq $0` so the stack frame remains uniform across all vectors.
+* **16-byte alignment calculation:** Hardware frame (40 bytes) + error_code & vector (16 bytes) + 15 general-purpose registers (120 bytes) = 176 bytes (`@sizeOf(TrapFrame) == 176`). Because 176 is divisible by 16, this preserves the 16-byte stack alignment required by the System V AMD64 ABI before calling Zig's `isrDispatch`.
 ### 3.3 Physical Memory Manager (PMM) Contract
-* Page size : `4096` bytes (`0x1000`) 。
-* Physical memory management limit : `128 MiB` (`0x0800_0000` = `32,768` pages) 。 ※ `TASK-001` of `boot.S` with first 1 GiB Identity
-* Reserved regions (marked used) :
- * Physical address `0x0000_0000` from `alignForward(__kernel_end, 4096)` all pages up to（ BIOS region、 VGA buffer、
-* Free regions : `alignForward(__kernel_end, 4096)` from `0x0800_0000` (128 MiB) with 。
+* Page size: `4096` bytes (`0x1000`).
+* Physical memory management limit: `128 MiB` (`0x0800_0000` = `32,768` pages), within the initial 1 GiB identity mapping from `boot.S`.
+* Reserved regions (marked used in bitmap):
+  * Physical address `0x0000_0000` up to `std.mem.alignForward(usize, @intFromPtr(&__kernel_end), 4096)` (covers BIOS data area, VGA buffer, and kernel image).
+* Free regions:
+  * From `std.mem.alignForward(usize, @intFromPtr(&__kernel_end), 4096)` to `0x0800_0000` (128 MiB).
 ---
 ## 4. Exact Data Structures & Signatures
 ### 4.1 `linker.ld` (Updated with Kernel Boundary Symbols)
@@ -100,7 +98,7 @@ SECTIONS
 }
 ```
 ### 4.2 `src/drivers/serial.zig` (Add Hex Formatter)
- of `serial.zig` of function add：
+Add the following helper to `serial.zig`:
 ```zig
 pub fn writeHex(val: u64) void {
     const hex_chars = "0123456789ABCDEF";
@@ -123,7 +121,6 @@ pub const USER_CODE_SEL: u16 = 0x20 | 3;
 pub const TSS_SEL: u16 = 0x28;
 pub const Tss = extern struct {
     reserved0: u32 align(1) = 0,
-
     rsp0: u64 align(1) = 0,
     rsp1: u64 align(1) = 0,
     rsp2: u64 align(1) = 0,
@@ -194,7 +191,6 @@ ISR_ERR   11
 ISR_ERR   12
 ISR_ERR   13
 ISR_ERR   14
-
 ISR_NOERR 15
 ISR_NOERR 16
 ISR_ERR   17
@@ -267,7 +263,6 @@ pub const TrapFrame = extern struct {
     r15: u64,
     r14: u64,
     r13: u64,
-
     r12: u64,
     r11: u64,
     r10: u64,
@@ -359,43 +354,43 @@ pub fn getFreePageCount() usize {
 ```
 ---
 ## 5. Step-by-Step Implementation Logic & State Transitions
-1. **Step 1: `gdt.zig` Implementation **
- * `tss.ist1 = @intFromPtr(&df_stack) + df_stack.len;` （ Double Fault ⽤ of ⽤stack）。
- * `tss_base = @intFromPtr(&tss)` and `tss_limit = @sizeOf(Tss) - 1` (103) from TSS Descriptor (16 bytes) 
-     * `gdt_entries[5]` (Low 64-bit):
-       `(tss_limit & 0xFFFF) | ((tss_base & 0xFFFFFF) << 16) | (0x89 << 40) | (((tss_limit >> 16) & 0xF) << 48) | ((
-     * `gdt_entries[6]` (High 64-bit):
+1. **Step 1: `gdt.zig` Implementation**
+   * Configure IST1 for Double Fault handling: `tss.ist1 = @intFromPtr(&df_stack) + df_stack.len`.
+   * Construct 16-byte TSS descriptor from `tss_base = @intFromPtr(&tss)` and `tss_limit = @sizeOf(Tss) - 1` (103):
+     * `gdt_entries[5]` (low 64-bit):
+       `(tss_limit & 0xFFFF) | ((tss_base & 0xFFFFFF) << 16) | (0x89 << 40) | (((tss_limit >> 16) & 0xF) << 48) | (((tss_base >> 24) & 0xFF) << 56)`
+     * `gdt_entries[6]` (high 64-bit):
        `tss_base >> 32`
- * `[10]u8 align(16)` of buffer `gdtr_buf` ⽤、 `std.mem.writeInt(u16, gdtr_buf[0..2], @sizeOf(@TypeOf(gdt_ent
- * Inline assembly with `lgdt (%[gdtr])` execute、 `pushq $0x08; leaq 1f(%rip), %rax; pushq %rax; lretq; 1:` with `CS`
-2. **Step 2: `idt.zig` Implementation **
- * `init()` with `0..32` of loop times、 `isr_stub_table[i]` 。
- * vector `3` (`#BP`) `type_attr = 0xEE` (Present, DPL=3, Trap Gate) and 。
- * vector `8` (`#DF`) `ist = 1`, `type_attr = 0x8E` and 。
- * of of vector `ist = 0`, `type_attr = 0x8E` (Present, DPL=0, Interrupt Gate) and 。
- * `gdt.zig` and `[10]u8 align(16)` of `idtr_buf` `limit = @sizeOf(@TypeOf(idt_entries)) - 1` and `base = @in
- * `isrDispatch(frame: *TrapFrame)` ：
- * `if (frame.vector == 3)` of when： `breakpoint_hit_count += 1;` execute、 `serial.writeString("[TINUX_INTR] Handl
- * of exceptionvector of when： `CR2` register `asm volatile ("mov %%cr2, %[cr2]" : [cr2] "=r" (-> u64))` with 
-3. **Step 3: `pmm.zig` Implementation **
- * bitmap of evaluation：pagesnumber `p` 、 `p / 8` 、mask `@as(u8, 1) << @intCa
- * `init()` with `0xFF` （use） with initialized。
- * `const kernel_end_phys = std.mem.alignForward(usize, @intFromPtr(&__kernel_end), PAGE_SIZE);` 、 `start_p
- * `allocPage()` `bitmap` first from ⾛、 `byte != 0xFF` of with empty ⾒ `1` 、 `free_pages
- * `freePage(phys_addr)` `phys_addr` 4096 with 、use（ `1` ） `std.de
-4. **Step 4: `src/main.zig` of testimplement **
- * `kmain()` with of with initialized and test execute：
+   * Populate a 10-byte GDTR descriptor buffer aligned to 16 bytes: `limit = @sizeOf(@TypeOf(gdt_entries)) - 1` and `base = @intFromPtr(&gdt_entries)`.
+   * Load GDTR using inline assembly `lgdt (%[gdtr])`, reload CS via far return (`pushq $0x08; leaq 1f(%rip), %rax; pushq %rax; lretq; 1:`), reload data segment registers with `0x10`, and load TSS via `ltr %%ax`.
+2. **Step 2: `idt.zig` Implementation**
+   * In `init()`, iterate over vectors `0..32` and assign addresses from `isr_stub_table[i]`.
+   * Configure vector `3` (`#BP`) with `type_attr = 0xEE` (Present, DPL=3, Trap Gate).
+   * Configure vector `8` (`#DF`) with `ist = 1` and `type_attr = 0x8E` (Present, DPL=0, Interrupt Gate).
+   * Configure all other exception vectors with `ist = 0` and `type_attr = 0x8E`.
+   * Load IDTR buffer via `lidt (%[idtr])`.
+   * In `isrDispatch(frame: *TrapFrame)`:
+     * If `frame.vector == 3`, increment `breakpoint_hit_count` and log `[TINUX_INTR] Handled #BP (Vector 3) cleanly\n`.
+     * For fatal exceptions, read CR2 if `frame.vector == 14`, emit diagnostic register dumps via `serial.writeHex`, and exit with `io.qemuExit(.failure)`.
+3. **Step 3: `pmm.zig` Implementation**
+   * Page tracking: page index `p`, byte offset `p / 8`, bitmask `@as(u8, 1) << @intCast(p % 8)`.
+   * In `init()`, initialize all bytes in `bitmap` to `0xFF` (allocated).
+   * Calculate `const kernel_end_phys = std.mem.alignForward(usize, @intFromPtr(&__kernel_end), PAGE_SIZE)`.
+   * Mark pages from `kernel_end_phys / PAGE_SIZE` up to `TOTAL_PAGES` as free (clearing bits to `0`) and set `free_pages_count`.
+   * In `allocPage()`, scan for the first byte not equal to `0xFF`, locate the first zero bit with `@ctz(~byte)`, set the bit to `1`, decrement `free_pages_count`, and return `page_idx * PAGE_SIZE`.
+   * In `freePage(phys_addr)`, assert alignment to 4096, clear the corresponding bit to `0`, and increment `free_pages_count`.
+4. **Step 4: `src/main.zig` Verification Suite**
+   * In `kmain()`, run the sequence:
      1. `serial.init()`
      2. `serial.writeString("[TINUX_TEST] START: TASK-002\n")`
-     3. `gdt.init()` → `serial.writeString("[TINUX_GDT] GDT & TSS loaded\n")`
-     4. `idt.init()` → `serial.writeString("[TINUX_IDT] IDT loaded\n")`
- 5. `asm volatile ("int3");` execute、 `std.debug.assert(idt.breakpoint_hit_count == 1);` verification。
- 6. `pmm.init()` execute、emptypages `30000` pages `std.debug.assert` with verification。
- 7. `const p1 = pmm.allocZeroedPage().?;` and `const p2 = pmm.allocZeroedPage().?;` 、 `p1 != p2` `(p1 
- 8. `pmm.freePage(p1);` of `const p3 = pmm.allocZeroedPage().?;` 、 `p3 == p1` （freedfirstpages of ⽤
- 9. `serial.writeString("[TINUX_TEST] PASS: TASK-002\n")` output、 `io.qemuExit(.success)` with exit。
+     3. `gdt.init()` followed by `serial.writeString("[TINUX_GDT] GDT & TSS loaded\n")`
+     4. `idt.init()` followed by `serial.writeString("[TINUX_IDT] IDT loaded\n")`
+     5. Execute `asm volatile ("int3")` and assert `idt.breakpoint_hit_count == 1`.
+     6. Execute `pmm.init()` and assert `pmm.getFreePageCount() >= 30000`.
+     7. Allocate two pages: `const p1 = pmm.allocZeroedPage().?` and `const p2 = pmm.allocZeroedPage().?`, asserting `p1 != p2`.
+     8. Free `p1`, then allocate `const p3 = pmm.allocZeroedPage().?`, asserting `p3 == p1` (LIFO or lowest-first reuse).
+     9. Log `[TINUX_TEST] PASS: TASK-002\n` and exit cleanly via `io.qemuExit(.success)`.
 ---
-
 ## 6. Verification Harness & Pass Criteria
 ### 6.1 Verification Command
 ```bash
@@ -413,7 +408,7 @@ Verify that all expected serial logs are emitted and `verify_qemu.sh` exits with
 ```
 ---
 ## 7. Escalation Report Template (On 3rd Consecutive Failure)
-3 timesconsecutive with or `./scripts/verify_qemu.sh TASK-002 5` when、 Builder fixloop stop、 `ESCALATIO
+If `zig build` or `./scripts/verify_qemu.sh TASK-002 5` fails three consecutive times, stop the modification loop and record an escalation report in `ESCALATION_REPORT.md`:
 ```markdown
 # Escalation Report: TASK-002
 ## 1. Failure Summary

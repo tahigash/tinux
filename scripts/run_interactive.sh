@@ -70,7 +70,7 @@ truncate -s 2M "$DISK_IMG" 2>/dev/null || dd if=/dev/zero of="$DISK_IMG" bs=1k c
 
 # 6. Repack initramfs.cpio and rebuild kernel
 echo -e "${CYAN}[PACKER]${NC} Updating initramfs.cpio and building Tinux kernel..."
-(cd "$INITRAMFS_ROOT" && find . -print | cpio -o -H newc 2>/dev/null) > src/fs/initramfs.cpio
+(cd "$INITRAMFS_ROOT" && find . -print | cpio -o -H newc 2>/dev/null) > .cache/initramfs.cpio
 zig build
 
 echo ""

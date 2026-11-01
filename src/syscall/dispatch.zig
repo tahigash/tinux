@@ -73,6 +73,7 @@ pub const SYS_GETEUID: u64 = 107;
 pub const SYS_GETEGID: u64 = 108;
 pub const SYS_GETPPID: u64 = 110;
 pub const SYS_GETPGRP: u64 = 111;
+pub const SYS_GETPGID: u64 = 121;
 pub const SYS_ARCH_PRCTL: u64 = 158;
 pub const SYS_GETTID: u64 = 186;
 pub const SYS_GETDENTS64: u64 = 217;
@@ -186,6 +187,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
     var res: isize = 0;
     var do_block: bool = false;
 
+    blk: {
     switch (num) {
         SYS_READ => {
             const fd = a1;
@@ -316,7 +318,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         SYS_OPENAT => {
-            _ = a1; // dirfd (ignoring or assuming AT_FDCWD)
+            // dirfd: assuming AT_FDCWD
             const path_str = getUserString(a2, 256) orelse {
                 res = errno_mod.toReturn(.EFAULT);
                 break :blk;
@@ -1194,6 +1196,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         else => res = errno_mod.toReturn(.ENOSYS),
+    }
     }
 
     if (do_block) {

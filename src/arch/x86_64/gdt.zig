@@ -26,10 +26,10 @@ pub const Tss = extern struct {
 
 var tss: Tss = .{};
 
-const GdtDescriptor = extern struct {
+const GdtDescriptor = packed struct {
     limit: u16,
     base: u64,
-} align(2);
+};
 
 var gdt_entries: [7]u64 = [_]u64{
     0, // 0: Null
@@ -88,4 +88,8 @@ pub fn init() void {
 
 pub fn setKernelRsp(rsp: usize) void {
     tss.rsp0 = rsp;
+}
+
+pub fn setKernelStack(rsp: usize) void {
+    setKernelRsp(rsp);
 }

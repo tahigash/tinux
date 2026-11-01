@@ -63,6 +63,8 @@ pub fn recordSample(syscall_num: u64, elapsed_cycles: u64, ret_val: isize) void 
     }
 }
 
+pub const generateProcReport = formatReport;
+
 /// Generates a `strace -c` style table sorted by total_cycles descending for `/proc/syscalls`
 pub fn formatReport(buf: []u8) []const u8 {
     var active_indices: [128]u16 = undefined;

@@ -24,9 +24,6 @@ export fn _start() callconv(.Naked) noreturn {
 inline fn syscall0(num: usize) isize {
     return asm volatile ("syscall"
         : [ret] "={rax}" (-> isize),
-
-
-89 ---
         : [num] "{rax}" (num),
         : "rcx", "r11", "memory"
     );
@@ -93,9 +90,6 @@ export fn workerEntry() callconv(.C) noreturn {
     unreachable;
 }
 export fn mainThread() callconv(.C) noreturn {
-
-
-90 ---
     // 1. Create pipe for epoll notification
     if (syscall1(22, @intFromPtr(&pipe_fds)) != 0) failExit(10);
     // 2. Create epoll instance via sys_epoll_create1(0) (291)

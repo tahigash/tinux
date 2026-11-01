@@ -28,31 +28,28 @@ if [[ ! -f "PROGRESS.md" ]]; then
 > 1. Find the first task below marked `[ ]`.
 > 2. Read its corresponding specification in `docs/specs/SPEC_TASK_0XX.md`.
 > 3. Implement the code and run `./scripts/verify_qemu.sh TASK-0XX`.
-> 4. When and only when `verify_qemu.sh` exits with `0` (`PASS`), update `[ ]` to `[x]`, commit all changes, and pro
+> 4. When and only when `verify_qemu.sh` exits with `0` (`PASS`), update `[ ]` to `[x]`, commit all changes, and proceed to the next milestone.
 > 5. If verification fails 3 consecutive times, stop immediately and write `ESCALATION_REPORT.md`.
 ## Milestone Checklist
-- [ ] **TASK-001**: `docs/specs/SPEC_TASK_001.md` — x86_64 Minimal Boot (Xen PVH), COM1 Serial Console & QEMU Auto-V
-- [ ] **TASK-002**: `docs/specs/SPEC_TASK_002.md` — GDT/TSS Reconstruction, IDT Exception Handlers (176B TrapFrame) 
-- [ ] **TASK-003**: `docs/specs/SPEC_TASK_003.md` — 4-Level Page Table Manager (VMM) & `std.mem.Allocator` Kernel He
-- [ ] **TASK-004**: `docs/specs/SPEC_TASK_004.md` — `SYSCALL`/`SYSRET` MSR Setup, Ring 3 Transition & Minimal Syscal
-- [ ] **TASK-005**: `docs/specs/SPEC_TASK_005.md` — Static ELF64 Loader, System V AMD64 Stack (`auxv`), TLS (`arch_p
-- [ ] **TASK-006**: `docs/specs/SPEC_TASK_006.md` — In-Memory VFS, CPIO (`newc`) Initramfs Unpacker, File I/O Syscal
-- [ ] **TASK-007**: `docs/specs/SPEC_TASK_007.md` — Multi-Process Management (`Task` Table, `cloneUserPml4`), `fork`
-- [ ] **TASK-008**: `docs/specs/SPEC_TASK_008.md` — IPC Pipes (`pipe2`), I/O Redirection (`dup2`/`O_CLOEXEC`), `/pro
-- [ ] **TASK-009**: `docs/specs/SPEC_TASK_009.md` — Writable `tmpfs` (Create/Write/Truncate/Unlink/Mkdir), `getdents
-- [ ] **TASK-010**: `docs/specs/SPEC_TASK_010.md` — Hardware Timer (8259A PIC + 8254 PIT 100Hz), `nanosleep`, `/proc
-- [ ] **TASK-011**: `docs/specs/SPEC_TASK_011.md` — Dynamic ELF Loader (`PT_INTERP` / `ld-musl-x86_64.so.1` Co-Loadi
-- [ ] **TASK-012**: `docs/specs/SPEC_TASK_012.md` — Bidirectional TTY Console (IRQ4 RX + Line Discipline + `termios`
-- [ ] **TASK-013**: `docs/specs/SPEC_TASK_013.md` — Linux Socket API (`AF_INET` 127.0.0.1 Loopback & `AF_UNIX` IPC) 
-- [ ] **TASK-014**: `docs/specs/SPEC_TASK_014.md` — Multi-Threading (`CLONE_VM | CLONE_THREAD | CLONE_SETTLS`), `sys
-- [ ] **TASK-015**: `docs/specs/SPEC_TASK_015.md` — PCI Bus Enumeration, VirtIO-Block DMA Driver (`/dev/vda`) & Host
-- [ ] **TASK-016**: `docs/specs/SPEC_TASK_016.md` — Persistent USTAR Filesystem (`tarfs`), `sys_mount`/`sys_umount2`
+- [ ] **TASK-001**: `docs/specs/SPEC_TASK_001.md`: x86_64 Minimal Boot (Xen PVH), COM1 Serial Console & QEMU Auto-Verification Harness
+- [ ] **TASK-002**: `docs/specs/SPEC_TASK_002.md`: GDT/TSS Reconstruction, IDT Exception Handlers (176B TrapFrame), and Bitmap PMM
+- [ ] **TASK-003**: `docs/specs/SPEC_TASK_003.md`: 4-Level Page Table Manager (VMM) and std.mem.Allocator Kernel Heap
+- [ ] **TASK-004**: `docs/specs/SPEC_TASK_004.md`: SYSCALL/SYSRET MSR Setup, Ring 3 Transition, and Minimal Syscall Dispatcher
+- [ ] **TASK-005**: `docs/specs/SPEC_TASK_005.md`: Static ELF64 Loader, System V AMD64 Stack (auxv), TLS (arch_prctl), and sys_brk
+- [ ] **TASK-006**: `docs/specs/SPEC_TASK_006.md`: In-Memory VFS, CPIO (newc) Initramfs Unpacker, and File I/O Syscalls
+- [ ] **TASK-007**: `docs/specs/SPEC_TASK_007.md`: Multi-Process Management (Task Table, cloneUserPml4), fork/execve/wait4
+- [ ] **TASK-008**: `docs/specs/SPEC_TASK_008.md`: IPC Pipes (pipe2), I/O Redirection (dup2/O_CLOEXEC), and /proc Pseudo-FS
+- [ ] **TASK-009**: `docs/specs/SPEC_TASK_009.md`: Writable tmpfs (Create/Write/Truncate/Unlink/Mkdir) and getdents64
+- [ ] **TASK-010**: `docs/specs/SPEC_TASK_010.md`: Hardware Timer (8259A PIC + 8254 PIT 100Hz), nanosleep, and /proc/[pid]/stat
+- [ ] **TASK-011**: `docs/specs/SPEC_TASK_011.md`: Dynamic ELF Loader (PT_INTERP / ld-musl-x86_64.so.1 Co-Loading)
+- [ ] **TASK-012**: `docs/specs/SPEC_TASK_012.md`: Bidirectional TTY Console (IRQ4 RX + Line Discipline + termios ioctls)
+- [ ] **TASK-013**: `docs/specs/SPEC_TASK_013.md`: Linux Socket API (AF_INET 127.0.0.1 Loopback & AF_UNIX IPC)
+- [ ] **TASK-014**: `docs/specs/SPEC_TASK_014.md`: Multi-Threading (CLONE_VM | CLONE_THREAD | CLONE_SETTLS) and sys_futex
+- [ ] **TASK-015**: `docs/specs/SPEC_TASK_015.md`: PCI Bus Enumeration, VirtIO-Block DMA Driver (/dev/vda), and Persistence
+- [ ] **TASK-016**: `docs/specs/SPEC_TASK_016.md`: Persistent USTAR Filesystem (tarfs), sys_mount/sys_umount2/sys_sync
 EOF
 fi
 append_task_if_missing() {
-
-
-180 ---
     local task_id="$1"
     local line="$2"
     if ! grep -q "\*\*${task_id}\*\*" PROGRESS.md; then
@@ -62,10 +59,10 @@ append_task_if_missing() {
         log_ok "${task_id} already present in PROGRESS.md (state preserved)"
     fi
 }
-append_task_if_missing "TASK-017" "- [ ] **TASK-017**: \`docs/specs/SPEC_TASK_017.md\` — VirtIO-Net PCI Network Driv
-append_task_if_missing "TASK-018" "- [ ] **TASK-018**: \`docs/specs/SPEC_TASK_018.md\` — User-Space Signal Delivery 
-append_task_if_missing "TASK-019" "- [ ] **TASK-019**: \`docs/specs/SPEC_TASK_019.md\` — UDP/IPv4 Socket Stack (\`SO
-append_task_if_missing "TASK-020" "- [ ] **TASK-020**: \`docs/specs/SPEC_TASK_020.md\` — Local APIC / IOAPIC Init, S
+append_task_if_missing "TASK-017" "- [ ] **TASK-017**: \`docs/specs/SPEC_TASK_017.md\`: VirtIO-Net PCI Network Driver & Ping Verification"
+append_task_if_missing "TASK-018" "- [ ] **TASK-018**: \`docs/specs/SPEC_TASK_018.md\`: User-Space Signal Delivery & rt_sigreturn"
+append_task_if_missing "TASK-019" "- [ ] **TASK-019**: \`docs/specs/SPEC_TASK_019.md\`: UDP/IPv4 Socket Stack (SOCK_DGRAM) & DNS Resolver"
+append_task_if_missing "TASK-020" "- [ ] **TASK-020**: \`docs/specs/SPEC_TASK_020.md\`: Local APIC / IOAPIC Init, SMP Multi-Core Boot (-smp 2)"
 # ------------------------------------------------------------------------------
 # 2. Update scripts/check_specs.sh for 20 Specifications
 # ------------------------------------------------------------------------------
@@ -73,19 +70,88 @@ log_info "Updating scripts/check_specs.sh for TASK-001 .. TASK-020..."
 cat << 'EOF' > scripts/check_specs.sh
 #!/usr/bin/env bash
 set -euo pipefail
+
+# ==============================================================================
+# Tinux Specification Readiness & Quality Validator (TASK-001 .. TASK-020)
+# Validates:
+#   1. Existence and non-emptiness (>30 lines)
+#   2. Absence of STATUS: PLACEHOLDER tags
+#   3. Zero stray clipboard markers (^\d+\s+---)
+#   4. Zero non-ASCII / Japanese characters (ord > 127)
+# ==============================================================================
+
+PYTHON_BIN=""
+for cand in python python3 py; do
+    if "$cand" -c 'import sys' >/dev/null 2>&1; then
+        PYTHON_BIN="$cand"
+        break
+    fi
+done
+
 echo "Checking Tinux specification readiness (TASK-001 .. TASK-020)..."
 READY_COUNT=0
 TOTAL_SPECS=20
+
 for num in $(seq -f "%03g" 1 "$TOTAL_SPECS"); do
     FILE="docs/specs/SPEC_TASK_${num}.md"
-    if [ -f "$FILE" ] && ! grep -q "STATUS: PLACEHOLDER" "$FILE" && [ "$(wc -l < "$FILE")" -gt 30 ]; then
-        echo "  [READY]   $FILE"
-        READY_COUNT=$((READY_COUNT + 1))
-    else
-        echo "  [PENDING] $FILE (needs full specification pasted)"
+
+    if [ ! -f "$FILE" ]; then
+        echo "  [PENDING] $FILE (file missing)"
+        continue
     fi
+
+    LINE_COUNT=$(wc -l < "$FILE" | tr -d ' ')
+    if [ "$LINE_COUNT" -le 30 ]; then
+        echo "  [PENDING] $FILE (fewer than 30 lines: $LINE_COUNT lines)"
+        continue
+    fi
+
+    if grep -q "STATUS: PLACEHOLDER" "$FILE"; then
+        echo "  [PENDING] $FILE (contains STATUS: PLACEHOLDER)"
+        continue
+    fi
+
+    if grep -qE "^[0-9]+[[:space:]]+---" "$FILE"; then
+        echo "  [PENDING] $FILE (contains clipboard marker '^[0-9]+ ---')"
+        continue
+    fi
+
+    HAS_NON_ASCII=0
+    if [ -n "$PYTHON_BIN" ]; then
+        if ! "$PYTHON_BIN" -c '
+import sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        data = f.read()
+    sys.exit(1 if any(b > 127 for b in data) else 0)
+except Exception:
+    sys.exit(2)
+' "$FILE" >/dev/null 2>&1; then
+            HAS_NON_ASCII=1
+        fi
+    else
+        NON_ASCII_COUNT=$(LC_ALL=C tr -d '\000-\177' < "$FILE" | wc -c | tr -d ' ')
+        if [ "$NON_ASCII_COUNT" -gt 0 ]; then
+            HAS_NON_ASCII=1
+        fi
+    fi
+
+    if [ "$HAS_NON_ASCII" -eq 1 ]; then
+        echo "  [PENDING] $FILE (contains non-ASCII or Japanese characters)"
+        continue
+    fi
+
+    echo "  [READY]   $FILE"
+    READY_COUNT=$((READY_COUNT + 1))
 done
+
 echo "Summary: ${READY_COUNT}/${TOTAL_SPECS} specifications ready for Builder execution."
+
+if [ "$READY_COUNT" -eq "$TOTAL_SPECS" ]; then
+    exit 0
+else
+    exit 1
+fi
 EOF
 chmod +x scripts/check_specs.sh
 log_ok "scripts/check_specs.sh updated to check 20 tasks."
@@ -120,9 +186,6 @@ for cmd in zig qemu-system-x86_64 cpio tar git python3; do
 done
 DIRS=(
     "docs/specs"
-
-
-181 ---
     "scripts"
     "tools"
     "src/arch/x86_64"
@@ -170,7 +233,7 @@ for num in $(seq -f "%03g" 1 20); do
     if [ ! -f "$SPEC_FILE" ]; then
         cat << SPEC_EOF > "$SPEC_FILE"
 # Tinux Implementation Specification: TASK-${num}
-> **STATUS: PLACEHOLDER — PASTE FULL SPECIFICATION FOR TASK-${num} HERE**
+> **STATUS: PLACEHOLDER: PASTE FULL SPECIFICATION FOR TASK-${num} HERE**
 > * **Title:** ${TASK_TITLES[$num]}
 SPEC_EOF
         log_warn "Created placeholder: $SPEC_FILE"
@@ -193,9 +256,6 @@ set -uo pipefail
 # Tinux Kernel & Linux ABI Automated Regression Test Runner (TASK-001 .. TASK-020)
 # ==============================================================================
 GREEN='\033[0;32m'
-
-
-182 ---
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 BLUE='\033[0;34m'
@@ -206,6 +266,13 @@ REPORT_FILE="REGRESSION_REPORT.md"
 KERNEL_BIN="zig-out/bin/tinux"
 TIMEOUT_SEC=12
 FORCE_STAGE=""
+PYTHON_BIN=""
+for cand in python python3 py; do
+    if "$cand" -c 'import sys' >/dev/null 2>&1; then
+        PYTHON_BIN="$cand"
+        break
+    fi
+done
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --stage|--target)
@@ -222,7 +289,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 now_ms() {
-    python3 -c 'import time; print(int(time.time() * 1000))'
+    if [[ -n "$PYTHON_BIN" ]]; then
+        "$PYTHON_BIN" -c 'import time; print(int(time.time() * 1000))'
+    else
+        echo 0
+    fi
 }
 detect_current_stage() {
     if [[ -n "$FORCE_STAGE" ]]; then
@@ -255,7 +326,7 @@ detect_current_stage() {
 CURRENT_STAGE_NUM=$(detect_current_stage)
 CURRENT_TASK_ID=$(printf "TASK-%03d" "$CURRENT_STAGE_NUM")
 echo -e "${BOLD}==============================================================================${NC}"
-echo -e "${BOLD}  Tinux Automated Regression Suite (20-Milestone Edition) — Stage: ${CYAN}${CURRENT_TASK_ID}${NC}"
+echo -e "${BOLD}  Tinux Automated Regression Suite (20-Milestone Edition): Stage: ${CYAN}${CURRENT_TASK_ID}${NC}"
 echo -e "${BOLD}==============================================================================${NC}"
 declare -a CHECK_IDS=()
 declare -a CHECK_NAMES=()
@@ -264,9 +335,6 @@ declare -a CHECK_TIMES=()
 declare -a CHECK_DETAILS=()
 PASS_COUNT=0
 FAIL_COUNT=0
-
-
-183 ---
 SKIP_COUNT=0
 record_result() {
     local id="$1"
@@ -311,22 +379,22 @@ else
     record_result "BUILD-ELF" "Zig freestanding kernel compilation" "FAIL" "$PRIMARY_MS" "zig-out/bin/tinux missing"
 fi
 T0=$(now_ms)
-if [[ -f "$KERNEL_BIN" ]] && python3 -c '
+if [[ -f "$KERNEL_BIN" ]] && [[ -n "$PYTHON_BIN" ]] && "$PYTHON_BIN" -c '
 import sys
 data = open(sys.argv[1], "rb").read()
 sys.exit(0 if b"Xen\x00" in data else 1)
 ' "$KERNEL_BIN" 2>/dev/null; then
     T1=$(now_ms)
-    record_result "BOOT-PVH" "Xen PVH ELF Note (XEN_ELFNOTE_PHYS32_ENTRY)" "PASS" "$((T1 - T0))" "Direct -kernel rea
+    record_result "BOOT-PVH" "Xen PVH ELF Note (XEN_ELFNOTE_PHYS32_ENTRY)" "PASS" "$((T1 - T0))" "Direct -kernel readiness"
 else
     T1=$(now_ms)
-    record_result "BOOT-PVH" "Xen PVH ELF Note (XEN_ELFNOTE_PHYS32_ENTRY)" "FAIL" "$((T1 - T0))" "Note missing in EL
+    record_result "BOOT-PVH" "Xen PVH ELF Note (XEN_ELFNOTE_PHYS32_ENTRY)" "FAIL" "$((T1 - T0))" "Note missing in ELF"
 fi
 T0=$(now_ms)
 COMPTIME_COUNT=$(grep -rn "@sizeOf(" src/ 2>/dev/null | wc -l | tr -d ' ')
 T1=$(now_ms)
 if (( COMPTIME_COUNT >= 1 )); then
-    record_result "ABI-ASSERT" "Compile-time Linux x86_64 ABI assertions" "PASS" "$((T1 - T0))" "${COMPTIME_COUNT} a
+    record_result "ABI-ASSERT" "Compile-time Linux x86_64 ABI assertions" "PASS" "$((T1 - T0))" "${COMPTIME_COUNT} assertions passed"
 else
     record_result "ABI-ASSERT" "Compile-time Linux x86_64 ABI assertions" "SKIP" "$((T1 - T0))" "Pre-TASK-002 stage"
 fi
@@ -336,20 +404,17 @@ fi
 echo -e "\n${BLUE}[Phase 2/3] Primary Milestone QEMU Execution & Exception Audit${NC}"
 LOG_CONTENT=""
 if [[ -f "/tmp/tinux_reg_primary.log" ]]; then
-
-
-184 ---
     LOG_CONTENT=$(cat "/tmp/tinux_reg_primary.log")
 fi
 if echo "$LOG_CONTENT" | grep -qE "\[TINUX_PANIC\]|Unhandled Exception|Triple fault"; then
-    record_result "CPU-HEALTH" "Zero Kernel Panic / #PF / #GP / #DF exceptions" "FAIL" "0" "Exception detected in lo
+    record_result "CPU-HEALTH" "Zero Kernel Panic / #PF / #GP / #DF exceptions" "FAIL" "0" "Exception detected in log"
 else
     record_result "CPU-HEALTH" "Zero Kernel Panic / #PF / #GP / #DF exceptions" "PASS" "0" "Clean Ring 0/Ring 3 run"
 fi
 if [[ "$PRIMARY_RC" -eq 0 ]]; then
-    record_result "$CURRENT_TASK_ID" "Active milestone verification harness" "PASS" "$PRIMARY_MS" "Exit code 0 (QEMU
+    record_result "$CURRENT_TASK_ID" "Active milestone verification harness" "PASS" "$PRIMARY_MS" "Exit code 0 (QEMU passed)"
 else
-    record_result "$CURRENT_TASK_ID" "Active milestone verification harness" "FAIL" "$PRIMARY_MS" "verify_qemu.sh fa
+    record_result "$CURRENT_TASK_ID" "Active milestone verification harness" "FAIL" "$PRIMARY_MS" "verify_qemu.sh failed"
 fi
 # ------------------------------------------------------------------------------
 # Phase 3: Cumulative Subsystem Regression Matrix (TASK-001 .. TASK-020)
@@ -369,9 +434,9 @@ if (( CURRENT_STAGE_NUM >= 12 )) && [[ -f "$KERNEL_BIN" ]]; then
             truncate -s 1M "$MATRIX_DISK"
         else
             dd if=/dev/zero of="$MATRIX_DISK" bs=1M count=1 status=none
-            printf "[TINUX_DISK_SECTOR0] Host-provisioned VirtIO-Block image ready!\n" | dd of="$MATRIX_DISK" conv=n
+            printf "[TINUX_DISK_SECTOR0] Host-provisioned VirtIO-Block image ready!\n" | dd of="$MATRIX_DISK" conv=notrunc status=none
         fi
-        QEMU_EXTRA_ARGS+=(-drive "file=$MATRIX_DISK,format=raw,if=none,id=drv0" -device "virtio-blk-pci,drive=drv0,d
+        QEMU_EXTRA_ARGS+=(-drive "file=$MATRIX_DISK,format=raw,if=none,id=drv0" -device "virtio-blk-pci,drive=drv0,disable-legacy=off")
     fi
     if (( CURRENT_STAGE_NUM >= 17 )); then
         QEMU_EXTRA_ARGS+=(-netdev "user,id=net0" -device "virtio-net-pci,netdev=net0,disable-legacy=off")
@@ -409,9 +474,6 @@ SRV_PID=$!
 /bin/net_test client
 wait $SRV_PID 2>/dev/null
 CMDS_13
-
-
-185 ---
         fi
         if (( CURRENT_STAGE_NUM >= 14 )); then
             cat << 'CMDS_14'
@@ -487,9 +549,6 @@ check_milestone_feature() {
         record_result "$task_id" "$title" "PASS" "$((MATRIX_MS / CURRENT_STAGE_NUM))" "Verified in QEMU serial log"
     else
         record_result "$task_id" "$title" "FAIL" "$((MATRIX_MS / CURRENT_STAGE_NUM))" "Pattern '$pattern' missing"
-
-
-186 ---
     fi
 }
 check_milestone_feature 1  "Boot & 16550A Serial Console Output"          "TINUX_TEST|TINUX_BOOT|TINUX_INIT"
@@ -499,7 +558,7 @@ check_milestone_feature 4  "SYSCALL/SYSRET MSRs & Ring 3 Transition"      "TINUX
 check_milestone_feature 5  "Static ELF64 Loader, Auxv, TLS & sys_brk"     "TINUX_ELF|TINUX_INIT"
 check_milestone_feature 6  "In-Memory VFS, CPIO Initramfs & BusyBox"      "Welcome to Tinux|TINUX_VFS"
 check_milestone_feature 7  "Multi-Process fork/execve/wait4 & /bin/sh"    "TINUX_SH|TINUX_INIT"
-check_milestone_feature 8  "IPC Pipes (pipe2), dup2 & /proc Pseudo-FS"    "Linux version 6\.12\.0-tinux|Welcome to T
+check_milestone_feature 8  "IPC Pipes (pipe2), dup2 & /proc Pseudo-FS"    "Linux version 6\.12\.0-tinux|Welcome to Tinux"
 check_milestone_feature 9  "Writable tmpfs, getdents64 & File Ops"        "hello\.txt|TMPFS_REGRESSION_PASS"
 check_milestone_feature 10 "PIT 100Hz Timer, nanosleep, /proc/pid & ps"   "PID|TINUX_PROC|TINUX_TIMER"
 check_milestone_feature 11 "Dynamic ELF Loader (PT_INTERP / ld-musl)"     "TINUX_DYN"
@@ -525,7 +584,7 @@ fi
     echo ""
     echo "* **Timestamp:** \`${TIMESTAMP}\`"
     echo "* **Detected Milestone Stage:** \`${CURRENT_TASK_ID}\`"
-    echo "* **Overall Verdict:** **${OVERALL_BADGE}** (\`${PASS_COUNT} Passed\`, \`${FAIL_COUNT} Failed\`, \`${SKIP_
+    echo "* **Overall Verdict:** **${OVERALL_BADGE}** (\`${PASS_COUNT} Passed\`, \`${FAIL_COUNT} Failed\`, \`${SKIP_COUNT} Skipped\`)"
     echo ""
     echo "## Results Matrix"
     echo ""
@@ -533,14 +592,14 @@ fi
     echo "| :--- | :--- | :---: | :---: | :--- |"
     for i in "${!CHECK_IDS[@]}"; do
         st="${CHECK_STATUS[$i]}"
-        icon=" ✅  PASS"
-        [[ "$st" == "FAIL" ]] && icon=" ❌  FAIL"
-        [[ "$st" == "SKIP" ]] && icon=" ⏭  SKIP"
-        echo "| \`${CHECK_IDS[$i]}\` | ${CHECK_NAMES[$i]} | ${icon} | \`${CHECK_TIMES[$i]}\` | ${CHECK_DETAILS[$i]} 
+        icon=" [PASS]"
+        [[ "$st" == "FAIL" ]] && icon=" [FAIL]"
+        [[ "$st" == "SKIP" ]] && icon=" [SKIP]"
+        echo "| \`${CHECK_IDS[$i]}\` | ${CHECK_NAMES[$i]} | ${icon} | \`${CHECK_TIMES[$i]}\` | ${CHECK_DETAILS[$i]} |"
     done
 } > "$REPORT_FILE"
 echo -e "\n${BOLD}==============================================================================${NC}"
-echo -e "  Regression Summary: ${GREEN}${PASS_COUNT} Passed${NC}, ${RED}${FAIL_COUNT} Failed${NC},${YELLOW}${SKIP_CO
+echo -e "  Regression Summary: ${GREEN}${PASS_COUNT} Passed${NC}, ${RED}${FAIL_COUNT} Failed${NC}, ${YELLOW}${SKIP_COUNT} Skipped${NC}"
 echo -e "  Markdown Report   : ${CYAN}${REPORT_FILE}${NC}"
 echo -e "${BOLD}==============================================================================${NC}"
 if (( FAIL_COUNT > 0 )); then
