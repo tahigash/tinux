@@ -592,18 +592,30 @@ export fn testMain() noreturn {
     }
 
     // =========================================================================
-    // Challenge 8: Multi-Second Sleep Non-Truncation Check (> 50 ticks)
+    // Challenge 8: Multi-Duration Long Sleep Non-Truncation Check (> 50 ticks)
     // =========================================================================
-    print("[CHALLENGE 8] Testing multi-second sleep non-truncation (> 50 ticks)...\n");
+    print("[CHALLENGE 8] Testing long sleeps (500ms, 1.2s) non-truncation (> 50 ticks)...\n");
     {
         var ts1: LinuxTimespec = .{};
         var ts2: LinuxTimespec = .{};
 
+        // Sub-test A: Exactly 500ms (50 ticks)
         _ = sys2(SYS_CLOCK_GETTIME, 0, @intFromPtr(&ts1));
-        // Sleep 1.2 seconds = 120 ticks (> 50 ticks)
+        const req_500: LinuxTimespec = .{ .tv_sec = 0, .tv_nsec = 500_000_000 };
+        const ret_500 = sys2(SYS_NANOSLEEP, @intFromPtr(&req_500), 0);
+        if (ret_500 != 0) fail(801, "sys_nanosleep(500ms) failed");
+        _ = sys2(SYS_CLOCK_GETTIME, 0, @intFromPtr(&ts2));
+        const delta_500 = (ts2.tv_sec - ts1.tv_sec) * 1000 + @divTrunc(ts2.tv_nsec - ts1.tv_nsec, 1_000_000);
+        print("  -> Sleep 500ms (50 ticks): elapsed = ");
+        printInt(@intCast(delta_500));
+        print(" ms\n");
+        if (delta_500 < 490) fail(802, "500ms sleep woke up too early");
+
+        // Sub-test B: 1.2s (120 ticks, > 50 ticks cap)
+        _ = sys2(SYS_CLOCK_GETTIME, 0, @intFromPtr(&ts1));
         const req_120: LinuxTimespec = .{ .tv_sec = 1, .tv_nsec = 200_000_000 };
         const ret_120 = sys2(SYS_NANOSLEEP, @intFromPtr(&req_120), 0);
-        if (ret_120 != 0) fail(801, "sys_nanosleep(1.2s) failed");
+        if (ret_120 != 0) fail(803, "sys_nanosleep(1.2s) failed");
 
         _ = sys2(SYS_CLOCK_GETTIME, 0, @intFromPtr(&ts2));
         const delta_ms = (ts2.tv_sec - ts1.tv_sec) * 1000 + @divTrunc(ts2.tv_nsec - ts1.tv_nsec, 1_000_000);
@@ -612,9 +624,9 @@ export fn testMain() noreturn {
         print(" ms\n");
 
         if (delta_ms < 1150) {
-            fail(802, "Sleep duration truncated! Tick cap may still exist.");
+            fail(804, "Sleep duration truncated! Tick cap may still exist.");
         }
-        print("  [PASS] Multi-second sleep completed accurately without truncation.\n\n");
+        print("  [PASS] Multi-duration long sleeps completed accurately without truncation.\n\n");
     }
 
     print("======================================================================\n");
