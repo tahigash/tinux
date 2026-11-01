@@ -236,6 +236,9 @@ pub fn init() void {
     _ = registerNodeInternal("proc", S_IFDIR | 0o755, "");
     _ = registerNodeInternal("tmp", S_IFDIR | 0o777, "");
     _ = registerNodeInternal("mnt", S_IFDIR | 0o755, "");
+    _ = registerNodeInternal("lib", S_IFDIR | 0o755, "");
+    _ = registerNodeInternal("usr", S_IFDIR | 0o755, "");
+    _ = registerNodeInternal("usr/lib", S_IFDIR | 0o755, "");
 
     // Register /dev/tty, /dev/console, and /dev/null as character devices
     _ = registerNodeInternal("dev/tty", S_IFCHR | 0o666, "");
@@ -410,6 +413,17 @@ pub fn lookup(raw_path: []const u8) ?usize {
     const norm = normalizePath(raw_path);
     if (lookupExact(norm)) |idx| {
         return idx;
+    }
+
+    // Musl dynamic linker reciprocal aliasing
+    if (std.mem.eql(u8, norm, "lib/libc.musl-x86_64.so.1") or std.mem.eql(u8, norm, "libc.musl-x86_64.so.1")) {
+        if (lookupExact("lib/ld-musl-x86_64.so.1")) |ld_idx| {
+            return ld_idx;
+        }
+    } else if (std.mem.eql(u8, norm, "lib/ld-musl-x86_64.so.1") or std.mem.eql(u8, norm, "ld-musl-x86_64.so.1")) {
+        if (lookupExact("lib/libc.musl-x86_64.so.1")) |libc_idx| {
+            return libc_idx;
+        }
     }
 
     // BusyBox multi-call applet fallback

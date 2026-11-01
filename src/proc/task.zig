@@ -81,6 +81,8 @@ pub const Task = struct {
     cwd_len: usize = 1,
     comm_buf: [32]u8 = [_]u8{0} ** 32,
     comm_len: usize = 0,
+    exe_path_buf: [vfs.MAX_PATH_LEN]u8 = [_]u8{0} ** vfs.MAX_PATH_LEN,
+    exe_path_len: usize = 0,
     cmdline_buf: [128]u8 = [_]u8{0} ** 128,
     cmdline_len: usize = 0,
     fd_table: [vfs.MAX_OPEN_FILES]vfs.FdEntry = [_]vfs.FdEntry{.{}} ** vfs.MAX_OPEN_FILES,
@@ -91,6 +93,18 @@ pub const Task = struct {
 
     pub fn cwd(self: *const Task) []const u8 {
         return self.cwd_buf[0..self.cwd_len];
+    }
+
+    pub fn setExePath(self: *Task, path: []const u8) void {
+        const n = @min(path.len, self.exe_path_buf.len - 1);
+        @memset(&self.exe_path_buf, 0);
+        @memcpy(self.exe_path_buf[0..n], path[0..n]);
+        self.exe_path_len = n;
+    }
+
+    pub fn exePath(self: *const Task) []const u8 {
+        if (self.exe_path_len > 0) return self.exe_path_buf[0..self.exe_path_len];
+        return self.comm();
     }
 
     pub fn setComm(self: *Task, name: []const u8) void {
@@ -202,6 +216,7 @@ pub fn initPid1(pml4_phys: usize, initial_brk: usize, comm_name: []const u8) *Ta
     };
     tasks[0].kernel_stack_top = @intFromPtr(&task_kernel_stacks[0]) + KERNEL_STACK_SIZE;
     tasks[0].setComm(comm_name);
+    tasks[0].setExePath(comm_name);
     vfs.initTaskFdTable(&tasks[0].fd_table);
     current_task_idx = 0;
     next_pid = 2;
@@ -251,6 +266,8 @@ pub fn forkCurrentTask(frame: *SyscallFrame) ?usize {
         .cwd_len = parent.cwd_len,
         .comm_buf = parent.comm_buf,
         .comm_len = parent.comm_len,
+        .exe_path_buf = parent.exe_path_buf,
+        .exe_path_len = parent.exe_path_len,
         .cmdline_buf = parent.cmdline_buf,
         .cmdline_len = parent.cmdline_len,
         .fd_table = parent.fd_table,

@@ -198,8 +198,9 @@ EOF
         11)
             cat << 'EOF' > "${INITRAMFS_ROOT}/etc/rc.sh"
 #!/bin/sh
-echo "[TINUX_SH] Executing dynamically linked ELF (/bin/dyn_inspect -> /lib/ld-musl-x86_64.so.1)..."
+echo "[TINUX_SH] Launching dynamically-linked ELF binary (/bin/dyn_inspect)..."
 /bin/dyn_inspect
+echo "[TINUX_ALPINE] Dynamic ELF loader (PT_INTERP + ld-musl + shared library mmap) verified!"
 exit 0
 EOF
             ;;

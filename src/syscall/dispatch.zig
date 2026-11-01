@@ -298,6 +298,52 @@ pub fn sysArchPrctl(code: usize, addr: usize) isize {
     }
 }
 
+pub fn sysPread64(fd: usize, buf_ptr: usize, count: usize, pos: usize) isize {
+    if (count == 0) return 0;
+    const cur_task = task.currentTask();
+    if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind != .VFS_FILE) {
+        return errno_mod.toReturn(.EBADF);
+    }
+    if (!validateUserBuffer(buf_ptr, count)) {
+        return errno_mod.toReturn(.EFAULT);
+    }
+    const node = vfs.getNode(cur_task.fd_table[fd].node_idx);
+    const file_data = node.slice();
+    if (pos >= file_data.len) return 0;
+    const avail = file_data.len - pos;
+    const to_read = @min(count, avail);
+    @memcpy(@as([*]u8, @ptrFromInt(buf_ptr))[0..to_read], file_data[pos .. pos + to_read]);
+    return @intCast(to_read);
+}
+
+pub fn sysReadlinkat(dirfd: isize, path_ptr: usize, buf_ptr: usize, bufsiz: usize) isize {
+    _ = dirfd;
+    const path_str = getUserString(path_ptr, 256) orelse {
+        return errno_mod.toReturn(.EFAULT);
+    };
+    if (!validateUserBuffer(buf_ptr, bufsiz)) {
+        return errno_mod.toReturn(.EFAULT);
+    }
+    const cur_task = task.currentTask();
+    if (std.mem.eql(u8, path_str, "/proc/self/exe")) {
+        const exe = cur_task.exePath();
+        const copy_len = @min(exe.len, bufsiz);
+        @memcpy(@as([*]u8, @ptrFromInt(buf_ptr))[0..copy_len], exe[0..copy_len]);
+        return @intCast(copy_len);
+    }
+    if (vfs.lookup(path_str)) |n_idx| {
+        const node = vfs.getNode(n_idx);
+        if ((node.mode & vfs.S_IFMT) == vfs.S_IFLNK) {
+            const target = node.slice();
+            const copy_len = @min(target.len, bufsiz);
+            @memcpy(@as([*]u8, @ptrFromInt(buf_ptr))[0..copy_len], target[0..copy_len]);
+            return @intCast(copy_len);
+        }
+        return errno_mod.toReturn(.EINVAL);
+    }
+    return errno_mod.toReturn(.ENOENT);
+}
+
 pub fn sysSetTidAddress(tidptr: usize) usize {
     const cur_task = task.currentTask();
     cur_task.clear_child_tid = tidptr;
@@ -592,33 +638,49 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             const fd = frame.r8;
             const offset = frame.r9;
             _ = prot;
-            _ = offset;
 
             if (len == 0) {
                 res = errno_mod.toReturn(.EINVAL);
             } else {
+                const MAP_FIXED: usize = 0x10;
+                const MAP_ANONYMOUS: usize = 0x20;
                 const aligned_len = std.mem.alignForward(usize, len, vmm.PAGE_SIZE);
-                const is_fixed = (flags & 0x10) != 0;
-                const base_vaddr = if (is_fixed and addr != 0) addr else cur_task.next_mmap_vaddr;
+                const is_fixed = (flags & MAP_FIXED) != 0;
+                const is_anon = (flags & MAP_ANONYMOUS) != 0;
+                const is_fixed_effective = is_fixed and addr != 0;
+                const base_vaddr = if (is_fixed_effective) (addr & ~@as(usize, 0xFFF)) else cur_task.next_mmap_vaddr;
 
                 var v = base_vaddr;
                 const top = base_vaddr + aligned_len;
                 while (v < top) : (v += vmm.PAGE_SIZE) {
-                    const p = pmm.allocZeroedPage() orelse {
-                        res = errno_mod.toReturn(.ENOMEM);
-                        break :blk;
-                    };
-                    _ = vmm.mapPage(cur_task.pml4_phys, v, p, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER);
+                    if (is_fixed_effective) {
+                        const p = pmm.allocZeroedPage() orelse {
+                            res = errno_mod.toReturn(.ENOMEM);
+                            break :blk;
+                        };
+                        _ = vmm.mapPage(cur_task.pml4_phys, v, p, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER);
+                    } else {
+                        if (vmm.translate(cur_task.pml4_phys, v) == null) {
+                            const p = pmm.allocZeroedPage() orelse {
+                                res = errno_mod.toReturn(.ENOMEM);
+                                break :blk;
+                            };
+                            _ = vmm.mapPage(cur_task.pml4_phys, v, p, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER);
+                        }
+                    }
                 }
 
-                if (fd < vfs.MAX_OPEN_FILES and cur_task.fd_table[fd].kind == .VFS_FILE) {
+                if (!is_anon and fd < vfs.MAX_OPEN_FILES and cur_task.fd_table[fd].kind == .VFS_FILE) {
                     const node = vfs.getNode(cur_task.fd_table[fd].node_idx);
                     const file_slice = node.slice();
-                    const copy_len = @min(file_slice.len, len);
-                    @memcpy(@as([*]u8, @ptrFromInt(base_vaddr))[0..copy_len], file_slice[0..copy_len]);
+                    if (offset < file_slice.len) {
+                        const avail = file_slice.len - offset;
+                        const copy_len = @min(avail, len);
+                        @memcpy(@as([*]u8, @ptrFromInt(base_vaddr))[0..copy_len], file_slice[offset .. offset + copy_len]);
+                    }
                 }
 
-                if (!is_fixed) {
+                if (!is_fixed_effective) {
                     cur_task.next_mmap_vaddr = top;
                 }
                 res = @intCast(base_vaddr);
@@ -693,26 +755,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         SYS_PREAD64 => {
-            const fd = a1;
-            const buf_ptr = a2;
-            const count = a3;
-            const offset = a4;
-            if (fd >= vfs.MAX_OPEN_FILES or cur_task.fd_table[fd].kind != .VFS_FILE) {
-                res = errno_mod.toReturn(.EBADF);
-            } else if (!validateUserBuffer(buf_ptr, count)) {
-                res = errno_mod.toReturn(.EFAULT);
-            } else {
-                const node = vfs.getNode(cur_task.fd_table[fd].node_idx);
-                const file_data = node.slice();
-                if (offset >= file_data.len) {
-                    res = 0;
-                } else {
-                    const avail = file_data.len - offset;
-                    const to_read = @min(count, avail);
-                    @memcpy(@as([*]u8, @ptrFromInt(buf_ptr))[0..to_read], file_data[offset .. offset + to_read]);
-                    res = @intCast(to_read);
-                }
-            }
+            res = sysPread64(a1, a2, a3, a4);
         },
 
         SYS_READV => {
@@ -1212,10 +1255,12 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             cur_task.pml4_phys = new_pml4;
             cur_task.initial_brk = loaded.initial_brk;
             cur_task.current_brk = loaded.initial_brk;
+            cur_task.next_mmap_vaddr = task.DEFAULT_MMAP_BASE;
             cur_task.fs_base = 0;
             syscall_arch.wrmsr(syscall_arch.MSR_FS_BASE, 0);
             vmm.loadCr3(new_pml4);
             cur_task.setComm(final_resolved_path[0..final_path_len]);
+            cur_task.setExePath(final_resolved_path[0..final_path_len]);
             cur_task.closeCloexecFds();
 
             frame.r15 = 0;
@@ -1464,24 +1509,11 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             }
         },
 
-        SYS_READLINK, SYS_READLINKAT => {
-            const path_ptr = if (num == SYS_READLINKAT) a2 else a1;
-            const buf_ptr = if (num == SYS_READLINKAT) a3 else a2;
-            const bufsiz = if (num == SYS_READLINKAT) a4 else a3;
-            const path_str = getUserString(path_ptr, 256) orelse {
-                res = errno_mod.toReturn(.EFAULT);
-                break :blk;
-            };
-            if (!validateUserBuffer(buf_ptr, bufsiz)) {
-                res = errno_mod.toReturn(.EFAULT);
-            } else if (std.mem.eql(u8, path_str, "/proc/self/exe")) {
-                const exe_path = cur_task.comm();
-                const copy_len = @min(exe_path.len, bufsiz);
-                @memcpy(@as([*]u8, @ptrFromInt(buf_ptr))[0..copy_len], exe_path[0..copy_len]);
-                res = @intCast(copy_len);
-            } else {
-                res = errno_mod.toReturn(.ENOENT);
-            }
+        SYS_READLINK => {
+            res = sysReadlinkat(-100, a1, a2, a3);
+        },
+        SYS_READLINKAT => {
+            res = sysReadlinkat(@bitCast(a1), a2, a3, a4);
         },
 
         SYS_GETCWD => {

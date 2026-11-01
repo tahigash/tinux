@@ -30,13 +30,15 @@ pub const AT_EGID: u64 = 14;
 pub const AT_SECURE: u64 = 23;
 pub const AT_RANDOM: u64 = 25;
 
-// User Space Boundaries & Stack Dimensions (TASK-005: 16 KiB Stack)
-pub const USER_ADDR_MAX: usize = 0x0000_8000_0000_0000;
-pub const USER_STACK_TOP: usize = 0x0080_4000;
-pub const USER_STACK_PAGES: usize = 4; // 16 KiB
-pub const USER_STACK_BOTTOM: usize = USER_STACK_TOP - (USER_STACK_PAGES * vmm.PAGE_SIZE); // 0x0080_0000
-
+// Memory Layout Constants & User Space Boundaries (TASK-011: 32 KiB Stack)
+pub const MAIN_PIE_LOAD_BIAS: usize = 0x0040_0000;
+pub const INTERP_LOAD_BIAS: usize = 0x1800_0000;
 pub const FALLBACK_PHDR_VADDR: usize = 0x003F_F000;
+
+pub const USER_ADDR_MAX: usize = 0x0000_8000_0000_0000;
+pub const USER_STACK_BOTTOM: usize = 0x0080_0000;
+pub const USER_STACK_PAGES: usize = 8; // 32 KiB
+pub const USER_STACK_TOP: usize = USER_STACK_BOTTOM + (USER_STACK_PAGES * vmm.PAGE_SIZE); // 0x0080_8000
 
 // ELF64 Header (64 bytes)
 pub const Elf64_Ehdr = extern struct {
@@ -117,11 +119,18 @@ pub const LoadedImage = struct {
     initial_brk: usize,
 };
 
+pub const SegmentMapResult = struct {
+    max_vaddr: usize,
+    phdr_vaddr: usize,
+    entry_rip: usize,
+};
+
 pub const LoadError = error{
     InvalidElfMagic,
     UnsupportedArchitecture,
     OutOfMemory,
     InvalidSegment,
+    InterpreterNotFound,
 };
 
 pub fn extractInterpPath(elf_bytes: []const u8) ?[]const u8 {
@@ -183,48 +192,49 @@ pub fn loadStaticElfWithArgs(
     return loadStaticElfInternal(pml4_phys, elf_bytes, argv, envp);
 }
 
-fn loadStaticElfInternal(
+pub fn mapElfSegments(
     pml4_phys: usize,
     elf_bytes: []const u8,
-    custom_argv: ?[]const []const u8,
-    custom_envp: ?[]const []const u8,
-) LoadError!LoadedImage {
-    // 1. ELF Header Validation (SPEC_TASK_005 Section 3.1 Item 1)
+    pie_load_bias: usize,
+) LoadError!SegmentMapResult {
     if (elf_bytes.len < @sizeOf(Elf64_Ehdr)) return error.InvalidElfMagic;
     const ehdr = @as(*align(1) const Elf64_Ehdr, @ptrCast(elf_bytes.ptr));
     if (!std.mem.eql(u8, ehdr.e_ident[0..4], "\x7FELF")) return error.InvalidElfMagic;
-    if (ehdr.e_ident[4] != 2 or ehdr.e_ident[5] != 1 or ehdr.e_type != ET_EXEC or ehdr.e_machine != EM_X86_64) {
+    if (ehdr.e_ident[4] != 2 or ehdr.e_ident[5] != 1 or (ehdr.e_type != ET_EXEC and ehdr.e_type != ET_DYN) or ehdr.e_machine != EM_X86_64) {
         return error.UnsupportedArchitecture;
     }
-    if (ehdr.e_entry >= USER_ADDR_MAX) return error.UnsupportedArchitecture;
     if (ehdr.e_phentsize < @sizeOf(Elf64_Phdr)) return error.InvalidSegment;
+
+    const bias: usize = if (ehdr.e_type == ET_DYN) pie_load_bias else 0;
+    const entry_rip = bias + @as(usize, @intCast(ehdr.e_entry));
+    if (entry_rip >= USER_ADDR_MAX) return error.UnsupportedArchitecture;
 
     var max_vaddr: usize = 0;
     var phdr_vaddr: usize = 0;
 
-    // 2. Iterate Program Headers and Map PT_LOAD Segments
     var i: usize = 0;
     while (i < ehdr.e_phnum) : (i += 1) {
         const off = @as(usize, @intCast(ehdr.e_phoff)) + i * @as(usize, ehdr.e_phentsize);
         if (off + @sizeOf(Elf64_Phdr) > elf_bytes.len) return error.InvalidSegment;
         const phdr = @as(*align(1) const Elf64_Phdr, @ptrCast(elf_bytes.ptr + off));
 
+        if (phdr.p_type == PT_PHDR) {
+            phdr_vaddr = bias + @as(usize, @intCast(phdr.p_vaddr));
+        }
+
         if (phdr.p_type == PT_LOAD and phdr.p_memsz > 0) {
-            // Validate segment filesz does not exceed memsz
             if (phdr.p_filesz > phdr.p_memsz) return error.InvalidSegment;
 
-            const seg_start = @as(usize, @intCast(phdr.p_vaddr));
+            const seg_start = bias + @as(usize, @intCast(phdr.p_vaddr));
             const seg_memsz = @as(usize, @intCast(phdr.p_memsz));
             const seg_filesz = @as(usize, @intCast(phdr.p_filesz));
 
-            // Validate segment bounds do not overflow or exceed USER_ADDR_MAX
             if (seg_start >= USER_ADDR_MAX or seg_memsz > USER_ADDR_MAX - seg_start) {
                 return error.InvalidSegment;
             }
             const seg_end = seg_start + seg_memsz;
             if (seg_end > max_vaddr) max_vaddr = seg_end;
 
-            // Non-page-aligned segment boundary calculation
             const seg_page_start = seg_start & ~@as(usize, 0xFFF);
             const seg_page_end = std.mem.alignForward(usize, seg_end, 4096);
             if (seg_page_end > USER_ADDR_MAX) return error.InvalidSegment;
@@ -237,7 +247,6 @@ fn loadStaticElfInternal(
                 }
             }
 
-            // Copy file payload (remaining bytes up to seg_memsz remain zeroed from allocZeroedPage)
             if (seg_filesz > 0) {
                 const p_off = @as(usize, @intCast(phdr.p_offset));
                 if (p_off > elf_bytes.len or seg_filesz > elf_bytes.len - p_off) return error.InvalidSegment;
@@ -246,7 +255,6 @@ fn loadStaticElfInternal(
                 }
             }
 
-            // Zero partial BSS page tail if memsz > filesz and start of BSS is on an existing page
             if (seg_memsz > seg_filesz) {
                 const bss_start = seg_start + seg_filesz;
                 const partial_len = @min(seg_end - bss_start, 4096 - (bss_start & 0xFFF));
@@ -261,8 +269,8 @@ fn loadStaticElfInternal(
                 }
             }
 
-            // Check if program headers are contained in this segment
-            if (ehdr.e_phoff >= phdr.p_offset and
+            if (phdr_vaddr == 0 and
+                ehdr.e_phoff >= phdr.p_offset and
                 (ehdr.e_phoff + @as(u64, ehdr.e_phnum) * ehdr.e_phentsize) <= (phdr.p_offset + phdr.p_filesz))
             {
                 phdr_vaddr = seg_start + @as(usize, @intCast(ehdr.e_phoff - phdr.p_offset));
@@ -270,10 +278,26 @@ fn loadStaticElfInternal(
         }
     }
 
+    return SegmentMapResult{
+        .max_vaddr = max_vaddr,
+        .phdr_vaddr = phdr_vaddr,
+        .entry_rip = entry_rip,
+    };
+}
+
+fn loadStaticElfInternal(
+    pml4_phys: usize,
+    elf_bytes: []const u8,
+    custom_argv: ?[]const []const u8,
+    custom_envp: ?[]const []const u8,
+) LoadError!LoadedImage {
+    var main_res = try mapElfSegments(pml4_phys, elf_bytes, MAIN_PIE_LOAD_BIAS);
+    const ehdr = @as(*align(1) const Elf64_Ehdr, @ptrCast(elf_bytes.ptr));
+
     // Fallback if program headers were not mapped in any PT_LOAD segment
-    if (phdr_vaddr == 0) {
-        phdr_vaddr = FALLBACK_PHDR_VADDR;
-        const page = phdr_vaddr & ~@as(usize, 0xFFF);
+    if (main_res.phdr_vaddr == 0) {
+        main_res.phdr_vaddr = FALLBACK_PHDR_VADDR;
+        const page = main_res.phdr_vaddr & ~@as(usize, 0xFFF);
         if (!isUserMapped(pml4_phys, page)) {
             const paddr = pmm.allocZeroedPage() orelse return error.OutOfMemory;
             _ = vmm.mapPage(pml4_phys, page, paddr, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER);
@@ -281,11 +305,25 @@ fn loadStaticElfInternal(
         const total_ph_size = @as(usize, ehdr.e_phnum) * @as(usize, ehdr.e_phentsize);
         const p_off = @as(usize, @intCast(ehdr.e_phoff));
         if (p_off + total_ph_size <= elf_bytes.len) {
-            _ = writeToUserVaddr(pml4_phys, phdr_vaddr, elf_bytes[p_off .. p_off + total_ph_size]);
+            _ = writeToUserVaddr(pml4_phys, main_res.phdr_vaddr, elf_bytes[p_off .. p_off + total_ph_size]);
         }
     }
 
-    // 3. Map 16 KiB User Stack (0x0080_0000 .. 0x0080_4000)
+    var at_base: usize = 0;
+    var start_rip: usize = main_res.entry_rip;
+
+    // Check for PT_INTERP
+    if (extractInterpPath(elf_bytes)) |interp_path| {
+        const vfs = @import("../fs/vfs.zig");
+        const interp_idx = vfs.lookup(interp_path) orelse return error.InterpreterNotFound;
+        const interp_node = vfs.getNode(interp_idx);
+        const interp_slice = interp_node.slice();
+        const interp_res = try mapElfSegments(pml4_phys, interp_slice, INTERP_LOAD_BIAS);
+        at_base = INTERP_LOAD_BIAS;
+        start_rip = interp_res.entry_rip;
+    }
+
+    // Map 32 KiB User Stack (0x0080_0000 .. 0x0080_8000)
     var stack_page = USER_STACK_BOTTOM;
     while (stack_page < USER_STACK_TOP) : (stack_page += 4096) {
         if (!isUserMapped(pml4_phys, stack_page)) {
@@ -294,22 +332,21 @@ fn loadStaticElfInternal(
         }
     }
 
-    // 4. Construct System V AMD64 Initial Stack
+    // Construct System V AMD64 Initial Stack
     const user_rsp: usize = if (custom_argv == null and custom_envp == null) blk: {
-        // Static Stack Layout matching SPEC_TASK_005 Section 5 Step 1
         const argv0_str = "/sbin/init\x00";
         const envp0_str = "PATH=/bin:/usr/bin\x00";
         const random_seed = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
 
-        const argv0_vaddr: usize = 0x0080_3F00;
-        const envp0_vaddr: usize = 0x0080_3F20;
-        const at_random_vaddr: usize = 0x0080_3F40;
+        const argv0_vaddr: usize = 0x0080_7F00;
+        const envp0_vaddr: usize = 0x0080_7F20;
+        const at_random_vaddr: usize = 0x0080_7F40;
 
         _ = writeToUserVaddr(pml4_phys, argv0_vaddr, argv0_str);
         _ = writeToUserVaddr(pml4_phys, envp0_vaddr, envp0_str);
         _ = writeToUserVaddr(pml4_phys, at_random_vaddr, &random_seed);
 
-        const rsp_start: usize = 0x0080_3E00;
+        const rsp_start: usize = 0x0080_7E00;
         const stack_slots = [_]u64{
             // argc
             1,
@@ -321,10 +358,11 @@ fn loadStaticElfInternal(
             0, // envp[1] = NULL
             // auxv pairs
             AT_PAGESZ, 4096,
-            AT_PHDR, phdr_vaddr,
+            AT_PHDR, main_res.phdr_vaddr,
             AT_PHENT, @as(u64, ehdr.e_phentsize),
             AT_PHNUM, @as(u64, ehdr.e_phnum),
-            AT_ENTRY, ehdr.e_entry,
+            AT_BASE, at_base,
+            AT_ENTRY, main_res.entry_rip,
             AT_RANDOM, at_random_vaddr,
             AT_SECURE, 0,
             AT_UID, 0,
@@ -341,7 +379,6 @@ fn loadStaticElfInternal(
         _ = writeToUserVaddr(pml4_phys, rsp_start, &slot_bytes);
         break :blk rsp_start;
     } else blk: {
-        // Dynamic Stack Layout for arbitrary argv / envp without temporary heap buffers
         const argv = custom_argv.?;
         const envp = custom_envp.?;
         var cur_sp = USER_STACK_TOP;
@@ -374,12 +411,12 @@ fn loadStaticElfInternal(
 
         // Auxiliary vector definition (13 pairs = 26 u64 words)
         const auxv_data = [_]u64{
-            AT_PHDR, phdr_vaddr,
+            AT_PHDR, main_res.phdr_vaddr,
             AT_PHENT, @as(u64, ehdr.e_phentsize),
             AT_PHNUM, @as(u64, ehdr.e_phnum),
             AT_PAGESZ, 4096,
-            AT_BASE, 0,
-            AT_ENTRY, ehdr.e_entry,
+            AT_BASE, at_base,
+            AT_ENTRY, main_res.entry_rip,
             AT_UID, 0,
             AT_EUID, 0,
             AT_GID, 0,
@@ -452,10 +489,10 @@ fn loadStaticElfInternal(
     };
 
     // 5. Initial Program Break
-    const initial_brk = std.mem.alignForward(usize, max_vaddr, vmm.PAGE_SIZE);
+    const initial_brk = std.mem.alignForward(usize, main_res.max_vaddr, vmm.PAGE_SIZE);
 
     return LoadedImage{
-        .entry_rip = @as(usize, @intCast(ehdr.e_entry)),
+        .entry_rip = start_rip,
         .user_rsp = user_rsp,
         .initial_brk = initial_brk,
     };
