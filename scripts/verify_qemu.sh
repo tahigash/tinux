@@ -406,15 +406,24 @@ for cmd in commands:
 '
             ;;
         17)
-            cat << 'EOF'
-echo "[TINUX_SH] Executing external ICMP ping over VirtIO-Net (eth0)..."
-/bin/ping_test
-echo "[TINUX_SH] Inspecting /proc/net/arp and /proc/net/dev:"
-/bin/cat /proc/net/arp
-/bin/cat /proc/net/dev
-echo "[TINUX_VIRTIONET] External ARP resolution and ICMP ping to 10.0.2.2 verified!"
-exit 0
-EOF
+            "$PYTHON_BIN" -c '
+import sys, time
+commands = [
+    "echo \"[TINUX_SH] Executing external ICMP ping over VirtIO-Net (eth0)...\"\n",
+    "/bin/ping_test\n",
+    "echo \"[TINUX_SH] Inspecting /proc/net/arp and /proc/net/dev:\"\n",
+    "/bin/cat /proc/net/arp\n",
+    "/bin/cat /proc/net/dev\n",
+    "echo \"[TINUX_VIRTIONET] External ARP resolution and ICMP ping to 10.0.2.2 verified!\"\n",
+    "exit 0\n"
+]
+for cmd in commands:
+    for ch in cmd:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(0.001)
+    time.sleep(0.05)
+'
             ;;
         18)
             cat << 'EOF'

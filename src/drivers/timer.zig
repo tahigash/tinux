@@ -63,6 +63,11 @@ pub fn onTick() void {
     const tty = @import("tty.zig");
     tty.pollSerialRx();
 
+    const virtio_net = @import("virtio_net.zig");
+    if (virtio_net.isReady()) {
+        virtio_net.pollRx();
+    }
+
     task.tickSleepWaiters();
     sendEoi(0);
 }

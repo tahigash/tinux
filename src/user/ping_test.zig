@@ -16,7 +16,7 @@ const IcmpEchoPkt = extern struct {
     sequence: u16 align(1) = 0x0100, // Seq 1 in BE
     payload: [16]u8 = "TINUX_ICMP_PING!".*,
 };
-export fn _start() callconv(.Naked) noreturn {
+pub export fn _start() callconv(.Naked) noreturn {
     asm volatile (
         \\ andq $-16, %rsp
         \\ call pingMain
@@ -98,3 +98,5 @@ export fn pingMain() callconv(.C) noreturn {
     _ = syscall1(231, 0);
     unreachable;
 }
+
+pub fn main() void {}

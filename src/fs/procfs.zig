@@ -7,6 +7,8 @@ const profiler = @import("../syscall/profiler.zig");
 const socket = @import("../net/socket.zig");
 const virtio_blk = @import("../drivers/virtio_blk.zig");
 const tarfs = @import("tarfs.zig");
+const virtio_net = @import("../drivers/virtio_net.zig");
+const netstack = @import("../net/netstack.zig");
 
 var meminfo_buf: [256]u8 = undefined;
 var uptime_buf: [64]u8 = undefined;
@@ -15,6 +17,8 @@ var proc_status_bufs: [task.MAX_TASKS][256]u8 = undefined;
 var proc_cmdline_bufs: [task.MAX_TASKS][128]u8 = undefined;
 var net_tcp_buf: [2048]u8 = undefined;
 var net_unix_buf: [2048]u8 = undefined;
+var net_arp_buf: [1024]u8 = undefined;
+var net_dev_buf: [1024]u8 = undefined;
 var syscalls_buf: [4096]u8 = undefined;
 var strace_buf: [256]u8 = undefined;
 var partitions_buf: [128]u8 = undefined;
@@ -82,6 +86,16 @@ pub fn initAndRegister() void {
         "proc/net/unix",
         vfs.S_IFREG | 0o444,
         "Num       RefCount Protocol Flags    Type St Inode Path\n",
+    );
+    _ = vfs.registerNode(
+        "proc/net/arp",
+        vfs.S_IFREG | 0o444,
+        "IP address       HW type     Flags       HW address            Mask     Device\n",
+    );
+    _ = vfs.registerNode(
+        "proc/net/dev",
+        vfs.S_IFREG | 0o444,
+        "Inter-|   Receive                                                |  Transmit\n face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets\n",
     );
 
     refreshDynamicNodes();
@@ -177,6 +191,51 @@ pub fn refreshDynamicNodes() void {
         }
     }
     _ = vfs.registerNode("proc/net/unix", vfs.S_IFREG | 0o444, net_unix_buf[0..unix_pos]);
+
+    // /proc/net/arp
+    var arp_pos: usize = 0;
+    const arp_hdr = "IP address       HW type     Flags       HW address            Mask     Device\n";
+    @memcpy(net_arp_buf[arp_pos .. arp_pos + arp_hdr.len], arp_hdr);
+    arp_pos += arp_hdr.len;
+
+    for (&netstack.arp_table) |e| {
+        if (e.valid) {
+            var ip_str_buf: [16]u8 = undefined;
+            const ip_str = std.fmt.bufPrint(&ip_str_buf, "{d}.{d}.{d}.{d}", .{ e.ip[0], e.ip[1], e.ip[2], e.ip[3] }) catch continue;
+            var mac_str_buf: [20]u8 = undefined;
+            const mac_str = std.fmt.bufPrint(&mac_str_buf, "{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}", .{ e.mac[0], e.mac[1], e.mac[2], e.mac[3], e.mac[4], e.mac[5] }) catch continue;
+
+            var row_buf: [128]u8 = undefined;
+            const row = std.fmt.bufPrint(&row_buf, "{s:<16} 0x1         0x2         {s:<21} *        eth0\n", .{ ip_str, mac_str }) catch continue;
+
+            if (arp_pos + row.len <= net_arp_buf.len) {
+                @memcpy(net_arp_buf[arp_pos .. arp_pos + row.len], row);
+                arp_pos += row.len;
+            }
+        }
+    }
+    _ = vfs.registerNode("proc/net/arp", vfs.S_IFREG | 0o444, net_arp_buf[0..arp_pos]);
+
+    // /proc/net/dev
+    var dev_pos: usize = 0;
+    const dev_hdr =
+        "Inter-|   Receive                                                |  Transmit\n" ++
+        " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets\n";
+    @memcpy(net_dev_buf[dev_pos .. dev_pos + dev_hdr.len], dev_hdr);
+    dev_pos += dev_hdr.len;
+
+    var dev_row_buf: [128]u8 = undefined;
+    const dev_row = std.fmt.bufPrint(
+        &dev_row_buf,
+        "  eth0:{d:>8}{d:>8}    0    0    0     0          0         0{d:>9}{d:>8}\n",
+        .{ virtio_net.rx_bytes, virtio_net.rx_packets, virtio_net.tx_bytes, virtio_net.tx_packets },
+    ) catch "  eth0:       0       0    0    0    0     0          0         0        0       0\n";
+
+    if (dev_pos + dev_row.len <= net_dev_buf.len) {
+        @memcpy(net_dev_buf[dev_pos .. dev_pos + dev_row.len], dev_row);
+        dev_pos += dev_row.len;
+    }
+    _ = vfs.registerNode("proc/net/dev", vfs.S_IFREG | 0o444, net_dev_buf[0..dev_pos]);
 
     refreshMounts();
     syncProcessNodes();
