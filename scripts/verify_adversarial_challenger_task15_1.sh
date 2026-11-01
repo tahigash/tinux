@@ -134,7 +134,7 @@ fi
 echo "[CHALLENGER1_HARNESS] Confirmed Sector 0 Challenger 1 persistence token on host!"
 
 # ==============================================================================
-# PHASE 2: Negative Test — PCI Bus Scan Without VirtIO-Block Device
+# PHASE 2: Negative Test -- PCI Bus Scan Without VirtIO-Block Device
 # ==============================================================================
 echo "[CHALLENGER1_HARNESS] Phase 2: Testing PCI bus scan without VirtIO-Block attached..."
 (

@@ -29,30 +29,7 @@ jobs:
 
       - name: ASCII & Humanizer Integrity Check
         run: |
-          python -c '
-          import os, sys
-          extensions = {".zig", ".md", ".sh", ".py", ".S", ".ld", ".json"}
-          errors = []
-          for root, dirs, files in os.walk("."):
-              if any(d in root for d in [".git", ".cache", ".zig-cache", "zig-out"]):
-                  continue
-              for f in files:
-                  ext = os.path.splitext(f)[1]
-                  if ext in extensions:
-                      path = os.path.join(root, f)
-                      with open(path, "rb") as fp:
-                          data = fp.read()
-                      for line_num, byte in enumerate(data, 1):
-                          if byte > 127:
-                              errors.append(f"{path}: contains non-ASCII byte 0x{byte:02x}")
-                              break
-          if errors:
-              print(f"[FAIL] Found {len(errors)} files with non-ASCII characters:")
-              for err in errors[:20]:
-                  print(f"  - {err}")
-              sys.exit(1)
-          print("[PASS] Repository 100% 7-bit ASCII compliant.")
-          '
+          python scripts/check_ascii_integrity.py
 
       - name: Specification Integrity Check (TASK-001..020)
         run: |
