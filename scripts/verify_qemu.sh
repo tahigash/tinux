@@ -25,6 +25,15 @@ for cand in python python3 py; do
     fi
 done
 
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    for cand_dir in "/c/Users/takashi/bin/qemu" "/c/Program Files/qemu" "$HOME/bin/qemu" "/c/qemu"; do
+        if [[ -f "$cand_dir/qemu-system-x86_64.exe" ]] || [[ -f "$cand_dir/qemu-system-x86_64" ]]; then
+            export PATH="$cand_dir:$PATH"
+            break
+        fi
+    done
+fi
+
 # ------------------------------------------------------------------------------
 # Pre-Check: Clean-Room License & Binary Guardrail Audit
 # ------------------------------------------------------------------------------
@@ -652,7 +661,7 @@ PY_EOF
     if (( TASK_NUM >= 20 )) && [[ -f "src/user/smp_test.zig" ]]; then
         build_user_elf "src/user/smp_test.zig" "${INITRAMFS_ROOT}/bin/smp_test" "-fno-pie" || exit 1
     fi
-    (cd "$INITRAMFS_ROOT" && find . -print | cpio -o -H newc 2>/dev/null) > .cache/initramfs.cpio
+    "$PYTHON_BIN" tools/cpio_writer.py "$INITRAMFS_ROOT" .cache/initramfs.cpio
 fi
 # ------------------------------------------------------------------------------
 # 2. Build Tinux Kernel

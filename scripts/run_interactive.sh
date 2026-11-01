@@ -18,6 +18,23 @@ DISK_IMG="tinux_user_disk.img"
 INITRAMFS_ROOT=".cache/initramfs_root"
 KERNEL_BIN="zig-out/bin/tinux"
 
+PYTHON_BIN=""
+for cand in python python3 py; do
+    if "$cand" -c 'import sys' >/dev/null 2>&1; then
+        PYTHON_BIN="$cand"
+        break
+    fi
+done
+
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    for cand_dir in "/c/Users/takashi/bin/qemu" "/c/Program Files/qemu" "$HOME/bin/qemu" "/c/qemu"; do
+        if [[ -f "$cand_dir/qemu-system-x86_64.exe" ]] || [[ -f "$cand_dir/qemu-system-x86_64" ]]; then
+            export PATH="$cand_dir:$PATH"
+            break
+        fi
+    done
+fi
+
 mkdir -p "$USER_APPS_DIR" "$DISK_STAGE" "$INITRAMFS_ROOT/bin"
 
 echo -e "${CYAN}[PACKER]${NC} Scanning ${USER_APPS_DIR}/ for C and Zig applications..."
@@ -70,7 +87,7 @@ truncate -s 2M "$DISK_IMG" 2>/dev/null || dd if=/dev/zero of="$DISK_IMG" bs=1k c
 
 # 6. Repack initramfs.cpio and rebuild kernel
 echo -e "${CYAN}[PACKER]${NC} Updating initramfs.cpio and building Tinux kernel..."
-(cd "$INITRAMFS_ROOT" && find . -print | cpio -o -H newc 2>/dev/null) > .cache/initramfs.cpio
+"$PYTHON_BIN" tools/cpio_writer.py "$INITRAMFS_ROOT" .cache/initramfs.cpio
 zig build
 
 echo ""
