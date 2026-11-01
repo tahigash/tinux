@@ -1,47 +1,41 @@
 const std = @import("std");
 
 pub const PAGE_SIZE: usize = 4096;
-pub const TOTAL_RAM_BYTES: usize = 128 * 1024 * 1024; // 128 MiB QEMU memory
-pub const TOTAL_PAGES: usize = TOTAL_RAM_BYTES / PAGE_SIZE;
+pub const TOTAL_RAM_BYTES: usize = 128 * 1024 * 1024; // 128 MiB
+pub const TOTAL_PAGES: usize = TOTAL_RAM_BYTES / PAGE_SIZE; // 32,768 pages
+pub const BITMAP_SIZE: usize = TOTAL_PAGES / 8; // 4,096 bytes
 
-// 128 MiB = 32768 pages. A bitmap of 32768 bits = 4096 bytes (1 page).
-var bitmap: [TOTAL_PAGES / 64]u64 = [_]u64{0} ** (TOTAL_PAGES / 64);
-var free_pages: usize = TOTAL_PAGES;
+extern const __kernel_start: u8;
+extern const __kernel_end: u8;
+
+var bitmap: [BITMAP_SIZE]u8 align(64) = [_]u8{0xFF} ** BITMAP_SIZE;
+var free_pages_count: usize = 0;
 
 pub fn init() void {
-    // Reserve lower 16 MiB (first 4096 pages) for kernel, BIOS, GDT, IDT, page tables
-    const reserved_pages = (16 * 1024 * 1024) / PAGE_SIZE;
-    for (0..reserved_pages) |i| {
-        markAllocated(i);
-    }
-}
+    @memset(&bitmap, 0xFF);
+    const kernel_end_phys = std.mem.alignForward(usize, @intFromPtr(&__kernel_end), PAGE_SIZE);
+    const start_page = kernel_end_phys / PAGE_SIZE;
+    std.debug.assert(start_page < TOTAL_PAGES);
 
-inline fn markAllocated(page_idx: usize) void {
-    const word = page_idx / 64;
-    const bit: u6 = @truncate(page_idx % 64);
-    if ((bitmap[word] & (@as(u64, 1) << bit)) == 0) {
-        bitmap[word] |= (@as(u64, 1) << bit);
-        if (free_pages > 0) free_pages -= 1;
+    for (start_page..TOTAL_PAGES) |p| {
+        const byte_idx = p / 8;
+        const bit: u3 = @intCast(p % 8);
+        bitmap[byte_idx] &= ~(@as(u8, 1) << bit);
     }
-}
-
-inline fn markFree(page_idx: usize) void {
-    const word = page_idx / 64;
-    const bit: u6 = @truncate(page_idx % 64);
-    if ((bitmap[word] & (@as(u64, 1) << bit)) != 0) {
-        bitmap[word] &= ~(@as(u64, 1) << bit);
-        free_pages += 1;
-    }
+    free_pages_count = TOTAL_PAGES - start_page;
+    std.debug.assert(free_pages_count >= 30000);
 }
 
 pub fn allocPage() ?usize {
-    for (&bitmap, 0..) |*word, w_idx| {
-        if (word.* != std.math.maxInt(u64)) {
-            const bit = @ctz(~word.*);
-            const page_idx = w_idx * 64 + bit;
+    for (&bitmap, 0..) |*byte, byte_idx| {
+        if (byte.* != 0xFF) {
+            const bit: u3 = @intCast(@ctz(~byte.*));
+            const page_idx = byte_idx * 8 + bit;
             if (page_idx >= TOTAL_PAGES) return null;
-            word.* |= (@as(u64, 1) << @as(u6, @truncate(bit)));
-            if (free_pages > 0) free_pages -= 1;
+            byte.* |= (@as(u8, 1) << bit);
+            if (free_pages_count > 0) {
+                free_pages_count -= 1;
+            }
             return page_idx * PAGE_SIZE;
         }
     }
@@ -49,21 +43,28 @@ pub fn allocPage() ?usize {
 }
 
 pub fn allocZeroedPage() ?usize {
-    const paddr = allocPage() orelse return null;
-    const ptr = @as([*]u8, @ptrFromInt(paddr));
-    @memset(ptr[0..PAGE_SIZE], 0);
-    return paddr;
+    const addr = allocPage() orelse return null;
+    const slice = @as([*]u8, @ptrFromInt(addr))[0..PAGE_SIZE];
+    @memset(slice, 0);
+    return addr;
 }
 
-pub fn freePage(paddr: usize) void {
-    const page_idx = paddr / PAGE_SIZE;
-    if (page_idx < TOTAL_PAGES) {
-        markFree(page_idx);
-    }
+pub fn freePage(phys_addr: usize) void {
+    std.debug.assert(phys_addr % PAGE_SIZE == 0);
+    std.debug.assert(phys_addr < TOTAL_RAM_BYTES);
+
+    const page_idx = phys_addr / PAGE_SIZE;
+    const byte_idx = page_idx / 8;
+    const bit: u3 = @intCast(page_idx % 8);
+    const mask = @as(u8, 1) << bit;
+
+    std.debug.assert((bitmap[byte_idx] & mask) != 0);
+    bitmap[byte_idx] &= ~mask;
+    free_pages_count += 1;
 }
 
 pub fn getFreePageCount() usize {
-    return free_pages;
+    return free_pages_count;
 }
 
 pub fn getTotalPageCount() usize {

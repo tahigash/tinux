@@ -77,7 +77,7 @@ pub const TaskId = enum {
 };
 
 /// Active milestone target. Update this single line to activate sequential suites:
-pub const CURRENT_TASK: TaskId = .TASK_001;
+pub const CURRENT_TASK: TaskId = .TASK_002;
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     serial.print("\n[TINUX_PANIC] {s}\n", .{msg});
@@ -88,6 +88,27 @@ fn runTask001() noreturn {
     serial.writeString("[TINUX_BOOT] Zig x86_64 Kernel Initialized\n");
     serial.writeString("[TINUX_TEST] START: TASK-001\n");
     serial.writeString("[TINUX_TEST] PASS: TASK-001\n");
+    io.qemuExitSuccess();
+}
+
+fn runTask002() noreturn {
+    serial.init();
+    serial.writeString("[TINUX_TEST] START: TASK-002\n");
+    gdt.init();
+    serial.writeString("[TINUX_GDT] GDT & TSS loaded\n");
+    idt.init();
+    serial.writeString("[TINUX_IDT] IDT loaded\n");
+    asm volatile ("int3");
+    std.debug.assert(idt.breakpoint_hit_count == 1);
+    pmm.init();
+    std.debug.assert(pmm.getFreePageCount() >= 30000);
+    const p1 = pmm.allocZeroedPage().?;
+    const p2 = pmm.allocZeroedPage().?;
+    std.debug.assert(p1 != p2);
+    pmm.freePage(p1);
+    const p3 = pmm.allocZeroedPage().?;
+    std.debug.assert(p3 == p1);
+    serial.writeString("[TINUX_TEST] PASS: TASK-002\n");
     io.qemuExitSuccess();
 }
 
@@ -171,6 +192,7 @@ export fn kmain() callconv(.C) noreturn {
 
     switch (CURRENT_TASK) {
         .TASK_001 => runTask001(),
+        .TASK_002 => runTask002(),
         inline else => |t| runFullKernel(t),
     }
 }
