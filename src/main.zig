@@ -22,6 +22,8 @@ const dispatch = @import("syscall/dispatch.zig");
 const initramfs = @import("initramfs");
 const initramfs_archive: []const u8 = initramfs.data;
 
+const init_test_elf = @embedFile("proc/init_test.elf");
+
 comptime {
     std.testing.refAllDecls(idt);
     std.testing.refAllDecls(vmm);
@@ -79,7 +81,7 @@ pub const TaskId = enum {
 };
 
 /// Active milestone target. Update this single line to activate sequential suites:
-pub const CURRENT_TASK: TaskId = .TASK_004;
+pub const CURRENT_TASK: TaskId = .TASK_005;
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     serial.print("\n[TINUX_PANIC] {s}\n", .{msg});
@@ -289,6 +291,36 @@ fn runTask004() noreturn {
     syscall_arch.enterUserMode(code_vaddr, 0x0080_2000);
 }
 
+fn runTask005() noreturn {
+    serial.init();
+    serial.writeString("[TINUX_TEST] START: TASK-005\n");
+
+    gdt.init();
+    idt.init();
+    // Mask legacy 8259A PIC interrupts until remapped in TASK-010
+    io.outb(0x21, 0xFF);
+    io.outb(0xA1, 0xFF);
+    pmm.init();
+    vmm.init();
+    heap.init();
+    syscall_arch.init();
+
+    dispatch.setCurrentTestName("TASK-005");
+
+    const kpml4 = vmm.getKernelPml4Phys();
+    _ = task.initPid1(kpml4, 0, "init_test");
+
+    const image = elf.loadStaticElf(kpml4, init_test_elf) catch |err| {
+        serial.print("ELF load error: {}\n", .{err});
+        @panic("TASK-005: Failed to load init_test ELF");
+    };
+
+    dispatch.initBrk(image.initial_brk);
+
+    serial.writeString("[TINUX_ELF] Loaded static ELF64 image, jumping to _start...\n");
+    syscall_arch.enterUserMode(image.entry_rip, image.user_rsp);
+}
+
 fn runFullKernel(target_task: TaskId) noreturn {
 
     gdt.init();
@@ -344,7 +376,7 @@ fn runFullKernel(target_task: TaskId) noreturn {
         const argv = [_][]const u8{ init_binary_name, "/etc/rc.sh" };
         const envp = [_][]const u8{ "PATH=/bin", "HOME=/", "TERM=vt100" };
 
-        const loaded = elf.loadStaticElf(pid1_pml4, raw_elf, &argv, &envp) catch |err| {
+        const loaded = elf.loadStaticElfWithArgs(pid1_pml4, raw_elf, &argv, &envp) catch |err| {
             serial.print("ELF load error: {}\n", .{err});
             @panic("Failed to load init ELF binary");
         };
@@ -372,6 +404,7 @@ export fn kmain() callconv(.C) noreturn {
         .TASK_002 => runTask002(),
         .TASK_003 => runTask003(),
         .TASK_004 => runTask004(),
+        .TASK_005 => runTask005(),
         inline else => |t| runFullKernel(t),
     }
 }

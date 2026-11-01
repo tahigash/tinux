@@ -110,6 +110,16 @@ pub const LinuxTimespec = extern struct {
     }
 };
 
+pub const ARCH_SET_FS: usize = 0x1002;
+pub const ARCH_GET_FS: usize = 0x1003;
+pub const MSR_FS_BASE: u32 = syscall_arch.MSR_FS_BASE; // 0xC000_0100
+pub const USER_ADDR_MAX: usize = 0x0000_8000_0000_0000;
+pub const MAX_BRK_GROWTH: usize = 16 * 1024 * 1024; // 16 MiB max heap growth
+
+pub var current_brk: usize = 0;
+pub var initial_brk: usize = 0;
+pub var current_fs_base: usize = 0;
+
 var current_test_name: []const u8 = "TASK-004";
 
 pub fn setCurrentTestName(name: []const u8) void {
@@ -168,9 +178,77 @@ fn sysExit(status: usize) noreturn {
 }
 
 pub fn initBrk(base: usize) void {
+    initial_brk = base;
+    current_brk = base;
     const cur = task.currentTask();
     cur.initial_brk = base;
     cur.current_brk = base;
+}
+
+pub fn sysBrk(new_brk: usize) usize {
+    const cur_task = task.currentTask();
+    const init_b = if (cur_task.initial_brk != 0) cur_task.initial_brk else initial_brk;
+    const cur_b = if (cur_task.current_brk != 0) cur_task.current_brk else current_brk;
+
+    if (new_brk == 0 or new_brk < init_b) {
+        return cur_b;
+    }
+    if (new_brk >= USER_ADDR_MAX or new_brk > init_b + MAX_BRK_GROWTH) {
+        return cur_b;
+    }
+
+    if (new_brk > cur_b) {
+        const old_top = std.mem.alignForward(usize, cur_b, vmm.PAGE_SIZE);
+        const new_top = std.mem.alignForward(usize, new_brk, vmm.PAGE_SIZE);
+        if (new_top > old_top) {
+            const pml4 = if (cur_task.pml4_phys != 0) cur_task.pml4_phys else vmm.getKernelPml4Phys();
+            var v = old_top;
+            while (v < new_top) : (v += vmm.PAGE_SIZE) {
+                const flags = vmm.getPteFlags(pml4, v);
+                if (flags == null or (flags.? & vmm.PTE_USER) == 0) {
+                    const p = pmm.allocZeroedPage() orelse {
+                        return cur_b;
+                    };
+                    if (!vmm.mapPage(pml4, v, p, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER)) {
+                        pmm.freePage(p);
+                        return cur_b;
+                    }
+                }
+            }
+        }
+    }
+
+    current_brk = new_brk;
+    cur_task.current_brk = new_brk;
+    return new_brk;
+}
+
+pub fn sysArchPrctl(code: usize, addr: usize) isize {
+    const cur_task = task.currentTask();
+    if (code == ARCH_SET_FS) {
+        if (addr >= USER_ADDR_MAX) {
+            return errno_mod.toReturn(.EINVAL);
+        }
+        current_fs_base = addr;
+        cur_task.fs_base = addr;
+        syscall_arch.wrmsr(MSR_FS_BASE, addr);
+        return 0;
+    } else if (code == ARCH_GET_FS) {
+        if (!validateUserBuffer(addr, 8)) {
+            return errno_mod.toReturn(.EFAULT);
+        }
+        const fs_val = if (cur_task.fs_base != 0) cur_task.fs_base else current_fs_base;
+        std.mem.writeInt(u64, @as(*[8]u8, @ptrFromInt(addr)), fs_val, .little);
+        return 0;
+    } else {
+        return errno_mod.toReturn(.EINVAL);
+    }
+}
+
+pub fn sysSetTidAddress(tidptr: usize) usize {
+    const cur_task = task.currentTask();
+    cur_task.clear_child_tid = tidptr;
+    return if (cur_task.pid != 0) cur_task.pid else 1;
 }
 
 export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
@@ -429,27 +507,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         SYS_BRK => {
-            const new_brk = a1;
-            if (new_brk == 0) {
-                res = @intCast(cur_task.current_brk);
-            } else if (new_brk < cur_task.initial_brk or new_brk >= 0x0000_8000_0000_0000) {
-                res = @intCast(cur_task.current_brk);
-            } else {
-                const old_top = std.mem.alignForward(usize, cur_task.current_brk, vmm.PAGE_SIZE);
-                const new_top = std.mem.alignForward(usize, new_brk, vmm.PAGE_SIZE);
-                if (new_top > old_top) {
-                    var v = old_top;
-                    while (v < new_top) : (v += vmm.PAGE_SIZE) {
-                        const p = pmm.allocZeroedPage() orelse {
-                            res = @intCast(cur_task.current_brk);
-                            break :blk;
-                        };
-                        _ = vmm.mapPage(cur_task.pml4_phys, v, p, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER);
-                    }
-                }
-                cur_task.current_brk = new_brk;
-                res = @intCast(new_brk);
-            }
+            res = @intCast(sysBrk(a1));
         },
 
         SYS_MMAP => {
@@ -735,7 +793,9 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         SYS_GETPGID => res = @intCast(cur_task.pgid),
         SYS_GETUID, SYS_GETGID, SYS_GETEUID, SYS_GETEGID => res = 0,
         SYS_GETTID => res = @intCast(cur_task.pid),
-        SYS_SET_TID_ADDRESS => res = @intCast(cur_task.pid),
+        SYS_SET_TID_ADDRESS => {
+            res = @intCast(sysSetTidAddress(a1));
+        },
 
         SYS_SOCKET => {
             const domain: u16 = @truncate(a1);
@@ -939,7 +999,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
             const argv_slice = collectStrings(a2);
             const envp_slice = collectStrings(a3);
 
-            const loaded = elf.loadStaticElf(new_pml4, elf_data, argv_slice, envp_slice) catch {
+            const loaded = elf.loadStaticElfWithArgs(new_pml4, elf_data, argv_slice, envp_slice) catch {
                 res = errno_mod.toReturn(.ENOEXEC);
                 break :blk;
             };
@@ -1142,22 +1202,7 @@ export fn syscallDispatch(frame: *SyscallFrame) callconv(.C) *SyscallFrame {
         },
 
         SYS_ARCH_PRCTL => {
-            const code = a1;
-            const addr = a2;
-            if (code == 0x1002) { // ARCH_SET_FS
-                cur_task.fs_base = addr;
-                syscall_arch.wrmsr(syscall_arch.MSR_FS_BASE, addr);
-                res = 0;
-            } else if (code == 0x1003) { // ARCH_GET_FS
-                if (!validateUserBuffer(addr, 8)) {
-                    res = errno_mod.toReturn(.EFAULT);
-                } else {
-                    std.mem.writeInt(u64, @as(*[8]u8, @ptrFromInt(addr)), cur_task.fs_base, .little);
-                    res = 0;
-                }
-            } else {
-                res = errno_mod.toReturn(.EINVAL);
-            }
+            res = sysArchPrctl(a1, a2);
         },
 
         SYS_CLOCK_GETTIME => {

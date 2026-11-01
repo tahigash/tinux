@@ -14,6 +14,7 @@ LOG_FILE="/tmp/tinux_qemu_${TEST_CASE}.log"
 DISK_IMG="/tmp/tinux_disk_${TEST_CASE}.img"
 KERNEL_BIN="zig-out/bin/tinux"
 INITRAMFS_ROOT=".cache/initramfs_root"
+rm -f src/proc/*.elf src/proc/*.o src/proc/*.elf.o
 mkdir -p .cache src/proc src/fs "$INITRAMFS_ROOT/bin" "$INITRAMFS_ROOT/etc" \
          "$INITRAMFS_ROOT/lib" "$INITRAMFS_ROOT/tmp" "$INITRAMFS_ROOT/mnt"
 
@@ -49,6 +50,11 @@ build_user_elf() {
     local src_file="$1"
     local out_bin="$2"
     local pie_flag="${3:--fno-pie}"
+    if [[ "$pie_flag" == "-fno-pie" ]]; then
+        pie_flag="-fno-PIE"
+    elif [[ "$pie_flag" == "-fpie" ]]; then
+        pie_flag="-fPIE"
+    fi
     if [[ ! -f "$src_file" ]]; then
         echo "[HARNESS] ERROR: Missing user source file: $src_file"
         return 1
@@ -58,6 +64,7 @@ build_user_elf() {
         -O ReleaseSmall \
         "$pie_flag" \
         "-femit-bin=${out_bin}" >/dev/null 2>&1; then
+        rm -f "${out_bin}.o"
         chmod +x "$out_bin"
         return 0
     fi
@@ -74,6 +81,7 @@ build_user_elf() {
         echo "[HARNESS] FAIL: Failed to compile user ELF $src_file"
         return 1
     fi
+    rm -f "${out_bin}.o"
     chmod +x "$out_bin"
     return 0
 }
@@ -541,7 +549,7 @@ BB_EOF
 # ------------------------------------------------------------------------------
 if (( TASK_NUM >= 5 )) && [[ -f "src/user/init_test.zig" ]]; then
     echo "[HARNESS] Compiling standalone user ELF src/user/init_test.zig..."
-    build_user_elf "src/user/init_test.zig" "src/proc/init_test.elf" "-fno-pie" || exit 1
+    build_user_elf "src/user/init_test.zig" "src/proc/init_test.elf" "-fno-PIE" || exit 1
 fi
 if (( TASK_NUM >= 6 )); then
     echo "[HARNESS] Preparing initramfs root filesystem for ${TEST_CASE}..."

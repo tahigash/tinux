@@ -2,17 +2,7 @@ const std = @import("std");
 const pmm = @import("../mm/pmm.zig");
 const vmm = @import("../mm/vmm.zig");
 
-pub const MAIN_PIE_LOAD_BIAS: usize = 0x0040_0000;
-pub const FALLBACK_PHDR_VADDR: usize = 0x003F_F000;
-pub const USER_STACK_BOTTOM: usize = 0x0080_0000;
-pub const USER_STACK_PAGES: usize = 8; // 32 KiB
-pub const USER_STACK_TOP: usize = USER_STACK_BOTTOM + (USER_STACK_PAGES * pmm.PAGE_SIZE);
-pub const INTERP_LOAD_BIAS: usize = 0x1800_0000;
-
-pub const ET_EXEC: u16 = 2;
-pub const ET_DYN: u16 = 3;
-pub const EM_X86_64: u16 = 62;
-
+// ELF Segment Types
 pub const PT_NULL: u32 = 0;
 pub const PT_LOAD: u32 = 1;
 pub const PT_DYNAMIC: u32 = 2;
@@ -20,6 +10,12 @@ pub const PT_INTERP: u32 = 3;
 pub const PT_PHDR: u32 = 6;
 pub const PT_TLS: u32 = 7;
 
+// ELF File Types & Architecture
+pub const ET_EXEC: u16 = 2;
+pub const ET_DYN: u16 = 3;
+pub const EM_X86_64: u16 = 62;
+
+// System V AMD64 Auxiliary Vector Tags
 pub const AT_NULL: u64 = 0;
 pub const AT_PHDR: u64 = 3;
 pub const AT_PHENT: u64 = 4;
@@ -34,6 +30,14 @@ pub const AT_EGID: u64 = 14;
 pub const AT_SECURE: u64 = 23;
 pub const AT_RANDOM: u64 = 25;
 
+// User Stack Dimensions (TASK-005: 16 KiB Stack)
+pub const USER_STACK_TOP: usize = 0x0080_4000;
+pub const USER_STACK_PAGES: usize = 4; // 16 KiB
+pub const USER_STACK_BOTTOM: usize = USER_STACK_TOP - (USER_STACK_PAGES * vmm.PAGE_SIZE); // 0x0080_0000
+
+pub const FALLBACK_PHDR_VADDR: usize = 0x003F_F000;
+
+// ELF64 Header (64 bytes)
 pub const Elf64_Ehdr = extern struct {
     e_ident: [16]u8,
     e_type: u16,
@@ -52,9 +56,24 @@ pub const Elf64_Ehdr = extern struct {
 
     comptime {
         std.debug.assert(@sizeOf(Elf64_Ehdr) == 64);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_ident") == 0);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_type") == 16);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_machine") == 18);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_version") == 20);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_entry") == 24);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_phoff") == 32);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_shoff") == 40);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_flags") == 48);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_ehsize") == 52);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_phentsize") == 54);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_phnum") == 56);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_shentsize") == 58);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_shnum") == 60);
+        std.debug.assert(@offsetOf(Elf64_Ehdr, "e_shstrndx") == 62);
     }
 };
 
+// ELF64 Program Header (56 bytes)
 pub const Elf64_Phdr = extern struct {
     p_type: u32,
     p_flags: u32,
@@ -67,17 +86,34 @@ pub const Elf64_Phdr = extern struct {
 
     comptime {
         std.debug.assert(@sizeOf(Elf64_Phdr) == 56);
+        std.debug.assert(@offsetOf(Elf64_Phdr, "p_type") == 0);
+        std.debug.assert(@offsetOf(Elf64_Phdr, "p_flags") == 4);
+        std.debug.assert(@offsetOf(Elf64_Phdr, "p_offset") == 8);
+        std.debug.assert(@offsetOf(Elf64_Phdr, "p_vaddr") == 16);
+        std.debug.assert(@offsetOf(Elf64_Phdr, "p_paddr") == 24);
+        std.debug.assert(@offsetOf(Elf64_Phdr, "p_filesz") == 32);
+        std.debug.assert(@offsetOf(Elf64_Phdr, "p_memsz") == 40);
+        std.debug.assert(@offsetOf(Elf64_Phdr, "p_align") == 48);
     }
 };
 
-pub const ElfLoadResult = struct {
+// ELF64 Auxiliary Vector Entry (16 bytes)
+pub const Elf64_Auxv = extern struct {
+    a_type: u64,
+    a_val: u64,
+
+    comptime {
+        std.debug.assert(@sizeOf(Elf64_Auxv) == 16);
+        std.debug.assert(@offsetOf(Elf64_Auxv, "a_type") == 0);
+        std.debug.assert(@offsetOf(Elf64_Auxv, "a_val") == 8);
+    }
+};
+
+// Loaded Image Result matching SPEC_TASK_005 Section 4.1
+pub const LoadedImage = struct {
     entry_rip: usize,
     user_rsp: usize,
     initial_brk: usize,
-    phdr_vaddr: usize,
-    phent: u16,
-    phnum: u16,
-    interp_base: usize = 0,
 };
 
 pub const LoadError = error{
@@ -108,6 +144,7 @@ pub fn extractInterpPath(elf_bytes: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Copy data to user virtual address space in pml4_phys across page boundaries
 pub fn writeToUserVaddr(pml4_phys: usize, dst_vaddr: usize, src: []const u8) bool {
     var i: usize = 0;
     while (i < src.len) {
@@ -122,28 +159,47 @@ pub fn writeToUserVaddr(pml4_phys: usize, dst_vaddr: usize, src: []const u8) boo
     return true;
 }
 
-pub fn loadElfImageSegments(
+fn isUserMapped(pml4_phys: usize, vaddr: usize) bool {
+    const flags = vmm.getPteFlags(pml4_phys, vaddr) orelse return false;
+    return (flags & vmm.PTE_USER) != 0;
+}
+
+/// Primary static ELF64 loader conforming strictly to SPEC_TASK_005 Section 4.1
+pub fn loadStaticElf(
     pml4_phys: usize,
     elf_bytes: []const u8,
-    forced_bias: ?usize,
-) LoadError!struct {
-    entry_rip: usize,
-    max_vaddr: usize,
-    load_bias: usize,
-    phdr_vaddr: usize,
-    phent: u16,
-    phnum: u16,
-} {
+) LoadError!LoadedImage {
+    return loadStaticElfInternal(pml4_phys, elf_bytes, null, null);
+}
+
+/// Extended loader for multi-argument invocations (forward compatible with dispatch.zig SYS_EXECVE and main.zig)
+pub fn loadStaticElfWithArgs(
+    pml4_phys: usize,
+    elf_bytes: []const u8,
+    argv: []const []const u8,
+    envp: []const []const u8,
+) LoadError!LoadedImage {
+    return loadStaticElfInternal(pml4_phys, elf_bytes, argv, envp);
+}
+
+fn loadStaticElfInternal(
+    pml4_phys: usize,
+    elf_bytes: []const u8,
+    custom_argv: ?[]const []const u8,
+    custom_envp: ?[]const []const u8,
+) LoadError!LoadedImage {
+    // 1. ELF Header Validation
     if (elf_bytes.len < @sizeOf(Elf64_Ehdr)) return error.InvalidElfMagic;
     const ehdr = @as(*align(1) const Elf64_Ehdr, @ptrCast(elf_bytes.ptr));
     if (!std.mem.eql(u8, ehdr.e_ident[0..4], "\x7FELF")) return error.InvalidElfMagic;
-    if (ehdr.e_ident[4] != 2 or ehdr.e_ident[5] != 1 or ehdr.e_machine != EM_X86_64) return error.UnsupportedArchitecture;
-
-    const load_bias = if (forced_bias) |b| b else (if (ehdr.e_type == ET_DYN) MAIN_PIE_LOAD_BIAS else 0);
+    if (ehdr.e_ident[4] != 2 or ehdr.e_ident[5] != 1 or ehdr.e_machine != EM_X86_64) {
+        return error.UnsupportedArchitecture;
+    }
 
     var max_vaddr: usize = 0;
     var phdr_vaddr: usize = 0;
 
+    // 2. Iterate Program Headers and Map PT_LOAD Segments
     var i: usize = 0;
     while (i < ehdr.e_phnum) : (i += 1) {
         const off = @as(usize, @intCast(ehdr.e_phoff)) + i * @as(usize, ehdr.e_phentsize);
@@ -151,172 +207,204 @@ pub fn loadElfImageSegments(
         const phdr = @as(*align(1) const Elf64_Phdr, @ptrCast(elf_bytes.ptr + off));
 
         if (phdr.p_type == PT_LOAD and phdr.p_memsz > 0) {
-            const seg_vaddr = load_bias + @as(usize, @intCast(phdr.p_vaddr));
-            const map_start = seg_vaddr & ~@as(usize, 0xFFF);
-            const map_end = std.mem.alignForward(usize, seg_vaddr + @as(usize, @intCast(phdr.p_memsz)), 4096);
+            const seg_start = @as(usize, @intCast(phdr.p_vaddr));
+            const seg_memsz = @as(usize, @intCast(phdr.p_memsz));
+            const seg_filesz = @as(usize, @intCast(phdr.p_filesz));
+            const seg_end = seg_start + seg_memsz;
+            if (seg_end > max_vaddr) max_vaddr = seg_end;
 
-            var page = map_start;
-            while (page < map_end) : (page += 4096) {
-                if (vmm.getPteFlags(pml4_phys, page) == null) {
+            // Non-page-aligned segment boundary calculation
+            const seg_page_start = seg_start & ~@as(usize, 0xFFF);
+            const seg_page_end = std.mem.alignForward(usize, seg_end, 4096);
+
+            var page_vaddr = seg_page_start;
+            while (page_vaddr < seg_page_end) : (page_vaddr += 4096) {
+                if (!isUserMapped(pml4_phys, page_vaddr)) {
                     const paddr = pmm.allocZeroedPage() orelse return error.OutOfMemory;
-                    _ = vmm.mapPage(pml4_phys, page, paddr, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER);
+                    _ = vmm.mapPage(pml4_phys, page_vaddr, paddr, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER);
                 }
             }
 
-            const p_off: usize = @intCast(phdr.p_offset);
-            const p_filesz: usize = @intCast(phdr.p_filesz);
-            if (p_filesz > 0) {
-                _ = writeToUserVaddr(pml4_phys, seg_vaddr, elf_bytes[p_off .. p_off + p_filesz]);
+            // Copy file payload (remaining bytes up to seg_memsz remain zeroed from allocZeroedPage)
+            if (seg_filesz > 0) {
+                const p_off = @as(usize, @intCast(phdr.p_offset));
+                if (p_off + seg_filesz > elf_bytes.len) return error.InvalidSegment;
+                if (!writeToUserVaddr(pml4_phys, seg_start, elf_bytes[p_off .. p_off + seg_filesz])) {
+                    return error.OutOfMemory;
+                }
             }
 
-            const seg_end = seg_vaddr + @as(usize, @intCast(phdr.p_memsz));
-            if (seg_end > max_vaddr) max_vaddr = seg_end;
-
-            if (ehdr.e_phoff >= phdr.p_offset and (ehdr.e_phoff + @as(u64, ehdr.e_phnum) * ehdr.e_phentsize) <= (phdr.p_offset + phdr.p_filesz)) {
-                phdr_vaddr = seg_vaddr + @as(usize, @intCast(ehdr.e_phoff - phdr.p_offset));
+            // Check if program headers are contained in this segment
+            if (ehdr.e_phoff >= phdr.p_offset and
+                (ehdr.e_phoff + @as(u64, ehdr.e_phnum) * ehdr.e_phentsize) <= (phdr.p_offset + phdr.p_filesz))
+            {
+                phdr_vaddr = seg_start + @as(usize, @intCast(ehdr.e_phoff - phdr.p_offset));
             }
         }
     }
 
+    // Fallback if program headers were not mapped in any PT_LOAD segment
     if (phdr_vaddr == 0) {
         phdr_vaddr = FALLBACK_PHDR_VADDR;
         const page = phdr_vaddr & ~@as(usize, 0xFFF);
-        if (vmm.getPteFlags(pml4_phys, page) == null) {
+        if (!isUserMapped(pml4_phys, page)) {
             const paddr = pmm.allocZeroedPage() orelse return error.OutOfMemory;
             _ = vmm.mapPage(pml4_phys, page, paddr, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER);
         }
         const total_ph_size = @as(usize, ehdr.e_phnum) * @as(usize, ehdr.e_phentsize);
-        const p_off: usize = @intCast(ehdr.e_phoff);
-        _ = writeToUserVaddr(pml4_phys, phdr_vaddr, elf_bytes[p_off .. p_off + total_ph_size]);
+        const p_off = @as(usize, @intCast(ehdr.e_phoff));
+        if (p_off + total_ph_size <= elf_bytes.len) {
+            _ = writeToUserVaddr(pml4_phys, phdr_vaddr, elf_bytes[p_off .. p_off + total_ph_size]);
+        }
     }
 
-    return .{
-        .entry_rip = load_bias + @as(usize, @intCast(ehdr.e_entry)),
-        .max_vaddr = max_vaddr,
-        .load_bias = load_bias,
-        .phdr_vaddr = phdr_vaddr,
-        .phent = ehdr.e_phentsize,
-        .phnum = ehdr.e_phnum,
-    };
-}
-
-pub fn loadStaticElf(
-    pml4_phys: usize,
-    elf_bytes: []const u8,
-    argv: []const []const u8,
-    envp: []const []const u8,
-) LoadError!ElfLoadResult {
-    const main_img = try loadElfImageSegments(pml4_phys, elf_bytes, null);
-    const initial_brk = std.mem.alignForward(usize, main_img.max_vaddr, 4096);
-
-    // Map User Stack
+    // 3. Map 16 KiB User Stack (0x0080_0000 .. 0x0080_4000)
     var stack_page = USER_STACK_BOTTOM;
     while (stack_page < USER_STACK_TOP) : (stack_page += 4096) {
-        if (vmm.getPteFlags(pml4_phys, stack_page) == null) {
+        if (!isUserMapped(pml4_phys, stack_page)) {
             const paddr = pmm.allocZeroedPage() orelse return error.OutOfMemory;
             _ = vmm.mapPage(pml4_phys, stack_page, paddr, vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_USER);
         }
     }
 
-    // Build Stack (from USER_STACK_TOP downward)
-    var cur_sp = USER_STACK_TOP;
+    // 4. Construct System V AMD64 Initial Stack
+    const user_rsp: usize = if (custom_argv == null and custom_envp == null) blk: {
+        // Static Stack Layout matching SPEC_TASK_005 Section 5 Step 1
+        const argv0_str = "/sbin/init\x00";
+        const envp0_str = "PATH=/bin:/usr/bin\x00";
+        const random_seed = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
 
-    // 1. Strings
-    var argv_vaddrs: [16]usize = undefined;
-    var envp_vaddrs: [16]usize = undefined;
+        const argv0_vaddr: usize = 0x0080_3F00;
+        const envp0_vaddr: usize = 0x0080_3F20;
+        const at_random_vaddr: usize = 0x0080_3F40;
 
-    for (envp, 0..) |e, idx| {
-        cur_sp -= (e.len + 1);
-        _ = writeToUserVaddr(pml4_phys, cur_sp, e);
-        _ = writeToUserVaddr(pml4_phys, cur_sp + e.len, "\x00");
-        if (idx < 16) envp_vaddrs[idx] = cur_sp;
-    }
+        _ = writeToUserVaddr(pml4_phys, argv0_vaddr, argv0_str);
+        _ = writeToUserVaddr(pml4_phys, envp0_vaddr, envp0_str);
+        _ = writeToUserVaddr(pml4_phys, at_random_vaddr, &random_seed);
 
-    for (argv, 0..) |a, idx| {
-        cur_sp -= (a.len + 1);
-        _ = writeToUserVaddr(pml4_phys, cur_sp, a);
-        _ = writeToUserVaddr(pml4_phys, cur_sp + a.len, "\x00");
-        if (idx < 16) argv_vaddrs[idx] = cur_sp;
-    }
+        const rsp_start: usize = 0x0080_3E00;
+        const stack_slots = [_]u64{
+            // argc
+            1,
+            // argv
+            argv0_vaddr,
+            0, // argv[1] = NULL
+            // envp
+            envp0_vaddr,
+            0, // envp[1] = NULL
+            // auxv pairs
+            AT_PAGESZ, 4096,
+            AT_PHDR, phdr_vaddr,
+            AT_PHENT, @as(u64, ehdr.e_phentsize),
+            AT_PHNUM, @as(u64, ehdr.e_phnum),
+            AT_ENTRY, ehdr.e_entry,
+            AT_RANDOM, at_random_vaddr,
+            AT_SECURE, 0,
+            AT_UID, 0,
+            AT_EUID, 0,
+            AT_GID, 0,
+            AT_EGID, 0,
+            AT_NULL, 0,
+        };
 
-    // 16-byte random seed for AT_RANDOM
-    cur_sp -= 16;
-    const at_random_vaddr = cur_sp;
-    const random_seed = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
-    _ = writeToUserVaddr(pml4_phys, at_random_vaddr, &random_seed);
+        var slot_bytes: [stack_slots.len * 8]u8 = undefined;
+        for (stack_slots, 0..) |val, idx| {
+            std.mem.writeInt(u64, slot_bytes[idx * 8 ..][0..8], val, .little);
+        }
+        _ = writeToUserVaddr(pml4_phys, rsp_start, &slot_bytes);
+        break :blk rsp_start;
+    } else blk: {
+        // Dynamic Stack Layout for custom argv / envp
+        const argv = custom_argv.?;
+        const envp = custom_envp.?;
+        var cur_sp = USER_STACK_TOP;
 
-    // Padding for alignment
-    cur_sp &= ~@as(usize, 0xF);
+        var argv_vaddrs: [16]usize = undefined;
+        var envp_vaddrs: [16]usize = undefined;
 
-    // Construct auxv, envp, argv, argc pointers
-    // Calculate total entries:
-    // auxv: 11 pairs + null pair = 24 u64
-    // envp: envp.len + 1
-    // argv: argv.len + 1
-    // argc: 1
-    const auxv_entries = 12 * 2;
-    const total_u64 = 1 + (argv.len + 1) + (envp.len + 1) + auxv_entries;
-    if ((total_u64 % 2) != 0) {
-        cur_sp -= 8; // Maintain 16-byte alignment of initial RSP
-    }
+        for (envp, 0..) |e, idx| {
+            cur_sp -= (e.len + 1);
+            _ = writeToUserVaddr(pml4_phys, cur_sp, e);
+            _ = writeToUserVaddr(pml4_phys, cur_sp + e.len, "\x00");
+            if (idx < 16) envp_vaddrs[idx] = cur_sp;
+        }
 
-    cur_sp -= auxv_entries * 8;
-    const auxv_sp = cur_sp;
+        for (argv, 0..) |a, idx| {
+            cur_sp -= (a.len + 1);
+            _ = writeToUserVaddr(pml4_phys, cur_sp, a);
+            _ = writeToUserVaddr(pml4_phys, cur_sp + a.len, "\x00");
+            if (idx < 16) argv_vaddrs[idx] = cur_sp;
+        }
 
-    const auxv_data = [_]u64{
-        AT_PHDR, main_img.phdr_vaddr,
-        AT_PHENT, main_img.phent,
-        AT_PHNUM, main_img.phnum,
-        AT_PAGESZ, 4096,
-        AT_BASE, 0,
-        AT_ENTRY, main_img.entry_rip,
-        AT_UID, 0,
-        AT_EUID, 0,
-        AT_GID, 0,
-        AT_EGID, 0,
-        AT_SECURE, 0,
-        AT_RANDOM, at_random_vaddr,
-        AT_NULL, 0,
+        cur_sp -= 16;
+        const at_random_vaddr = cur_sp;
+        const random_seed = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
+        _ = writeToUserVaddr(pml4_phys, at_random_vaddr, &random_seed);
+
+        cur_sp &= ~@as(usize, 0xF);
+
+        const auxv_entries: usize = 12 * 2;
+        const total_u64 = 1 + (argv.len + 1) + (envp.len + 1) + auxv_entries;
+        if ((total_u64 % 2) != 0) {
+            cur_sp -= 8;
+        }
+
+        cur_sp -= auxv_entries * 8;
+        const auxv_sp = cur_sp;
+        const auxv_data = [_]u64{
+            AT_PHDR, phdr_vaddr,
+            AT_PHENT, @as(u64, ehdr.e_phentsize),
+            AT_PHNUM, @as(u64, ehdr.e_phnum),
+            AT_PAGESZ, 4096,
+            AT_BASE, 0,
+            AT_ENTRY, ehdr.e_entry,
+            AT_UID, 0,
+            AT_EUID, 0,
+            AT_GID, 0,
+            AT_EGID, 0,
+            AT_SECURE, 0,
+            AT_RANDOM, at_random_vaddr,
+            AT_NULL, 0,
+        };
+        var aux_bytes: [auxv_data.len * 8]u8 = undefined;
+        for (auxv_data, 0..) |v, idx| {
+            std.mem.writeInt(u64, aux_bytes[idx * 8 ..][0..8], v, .little);
+        }
+        _ = writeToUserVaddr(pml4_phys, auxv_sp, &aux_bytes);
+
+        cur_sp -= (envp.len + 1) * 8;
+        const envp_sp = cur_sp;
+        for (0..envp.len) |idx| {
+            var b: [8]u8 = undefined;
+            std.mem.writeInt(u64, &b, envp_vaddrs[idx], .little);
+            _ = writeToUserVaddr(pml4_phys, envp_sp + idx * 8, &b);
+        }
+        var zero_b = [_]u8{0} ** 8;
+        _ = writeToUserVaddr(pml4_phys, envp_sp + envp.len * 8, &zero_b);
+
+        cur_sp -= (argv.len + 1) * 8;
+        const argv_sp = cur_sp;
+        for (0..argv.len) |idx| {
+            var b: [8]u8 = undefined;
+            std.mem.writeInt(u64, &b, argv_vaddrs[idx], .little);
+            _ = writeToUserVaddr(pml4_phys, argv_sp + idx * 8, &b);
+        }
+        _ = writeToUserVaddr(pml4_phys, argv_sp + argv.len * 8, &zero_b);
+
+        cur_sp -= 8;
+        var argc_b: [8]u8 = undefined;
+        std.mem.writeInt(u64, &argc_b, argv.len, .little);
+        _ = writeToUserVaddr(pml4_phys, cur_sp, &argc_b);
+
+        break :blk cur_sp;
     };
-    var aux_bytes: [auxv_data.len * 8]u8 = undefined;
-    for (auxv_data, 0..) |v, idx| {
-        std.mem.writeInt(u64, aux_bytes[idx * 8 ..][0..8], v, .little);
-    }
-    _ = writeToUserVaddr(pml4_phys, auxv_sp, &aux_bytes);
 
-    // envp
-    cur_sp -= (envp.len + 1) * 8;
-    const envp_sp = cur_sp;
-    for (0..envp.len) |idx| {
-        var b: [8]u8 = undefined;
-        std.mem.writeInt(u64, &b, envp_vaddrs[idx], .little);
-        _ = writeToUserVaddr(pml4_phys, envp_sp + idx * 8, &b);
-    }
-    var zero_b = [_]u8{0} ** 8;
-    _ = writeToUserVaddr(pml4_phys, envp_sp + envp.len * 8, &zero_b);
+    // 5. Initial Program Break
+    const initial_brk = std.mem.alignForward(usize, max_vaddr, vmm.PAGE_SIZE);
 
-    // argv
-    cur_sp -= (argv.len + 1) * 8;
-    const argv_sp = cur_sp;
-    for (0..argv.len) |idx| {
-        var b: [8]u8 = undefined;
-        std.mem.writeInt(u64, &b, argv_vaddrs[idx], .little);
-        _ = writeToUserVaddr(pml4_phys, argv_sp + idx * 8, &b);
-    }
-    _ = writeToUserVaddr(pml4_phys, argv_sp + argv.len * 8, &zero_b);
-
-    // argc
-    cur_sp -= 8;
-    var argc_b: [8]u8 = undefined;
-    std.mem.writeInt(u64, &argc_b, argv.len, .little);
-    _ = writeToUserVaddr(pml4_phys, cur_sp, &argc_b);
-
-    return .{
-        .entry_rip = main_img.entry_rip,
-        .user_rsp = cur_sp,
+    return LoadedImage{
+        .entry_rip = @as(usize, @intCast(ehdr.e_entry)),
+        .user_rsp = user_rsp,
         .initial_brk = initial_brk,
-        .phdr_vaddr = main_img.phdr_vaddr,
-        .phent = main_img.phent,
-        .phnum = main_img.phnum,
     };
 }
