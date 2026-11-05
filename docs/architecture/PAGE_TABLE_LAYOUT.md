@@ -131,7 +131,7 @@ During initial boot and staging across TASK-001 through TASK-020, the Tinux kern
 The first 4 MiB of the virtual address space is intentionally left unmapped. Any read, write, or instruction fetch addressing this range immediately causes a Page Fault (`#PF`) with address `0x0`, detecting null pointer dereferences.
 
 ### User ELF Binary (`0x0040_0000` .. `0x007F_FFFF`)
-Standard clean-room static and dynamic Linux userland executables are loaded at base address `0x0040_0000` (`MAIN_PIE_LOAD_BIAS`):
+Standard static and dynamic Linux userland executables are loaded at base address `0x0040_0000` (`MAIN_PIE_LOAD_BIAS`):
 * Text segment: Mapped with `PTE_PRESENT | PTE_USER`.
 * Rodata segment: Mapped with `PTE_PRESENT | PTE_USER | PTE_NX`.
 * Data and BSS: Mapped with `PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_NX`.

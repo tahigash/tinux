@@ -8,7 +8,7 @@
 
 The Tinux kernel supports the standard Linux x86_64 syscall ABI, System V process initialization stack (`argc`, `argv`, `envp`, `auxv`), Thread-Local Storage (`arch_prctl`), POSIX signals, non-blocking I/O, sockets, multi-threading, and persistent block storage (VirtIO-Block + TarFS).
 
-All default userland utilities, test binaries, and shell environments provided in Tinux are clean-room implementations (including the in-tree Zig micro-userland), without requiring or bundling external GPL BusyBox or GNU coreutils binaries. Standard Linux binaries built with Zig, C, or Rust execute directly on the Tinux kernel.
+All default userland utilities, test binaries, and shell environments provided in Tinux are from-scratch implementations (including the in-tree Zig micro-userland), without requiring or bundling external GPL BusyBox or GNU coreutils binaries. Standard Linux binaries built with Zig, C, or Rust execute directly on the Tinux kernel.
 
 ### Recommended Compiler Options by Toolchain
 

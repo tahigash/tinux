@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Tinux Project Developers
 // Dual-licensed under MIT or Apache-2.0
-// Clean-room Adversarial Virtual Memory Isolation and Fork Verifier
+// From-scratch Adversarial Virtual Memory Isolation and Fork Verifier
 
 const std = @import("std");
 

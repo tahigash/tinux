@@ -34,7 +34,7 @@ You are the Implementation Builder. Implement the requirements adhering strictly
   * `src/fs/vfs.zig` (Modify: integrate `FdKind` into file descriptor table, support `pipe` and `proc` nodes)
   * `src/proc/task.zig` (Modify: add `WAITING_PIPE` task state, wake pipe waiters on write/close)
   * `src/syscall/dispatch.zig` (Modify: implement `pipe`/`pipe2`, `dup`/`dup2`/`dup3`, close-on-exec)
-  * `src/main.zig` (Modify: register procfs, launch pipeline test in the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
+  * `src/main.zig` (Modify: register procfs, launch pipeline test in the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
   * `scripts/verify_qemu.sh` (Modify: add `/etc/rc.sh` pipeline test and ensure `/bin/grep` utility exists)
 ---
 ## 3. IPC & Pseudo-Filesystem Contract (AI Audited)
@@ -209,7 +209,7 @@ pub fn initAndRegister() void {
      * Close existing `newfd` if open.
      * Duplicate descriptor entry, increment reader/writer reference counts, clear `cloexec` flag, and return `newfd`.
 4. **Step 4: Script & Harness Integration in `verify_qemu.sh`**
-   * In `scripts/verify_qemu.sh`, provision `/etc/rc.sh` using the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`) to test pipeline execution:
+   * In `scripts/verify_qemu.sh`, provision `/etc/rc.sh` using the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`) to test pipeline execution:
      ```sh
      #!/bin/sh
      echo "[TINUX_SH] Testing shell pipeline (cat /etc/motd | grep Tinux)..."

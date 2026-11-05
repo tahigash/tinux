@@ -36,7 +36,7 @@ You are the Implementation Builder. Implement the requirements adhering strictly
   * `src/fs/procfs.zig` (Modify: dynamically generate `/proc/[pid]/stat`, `/proc/[pid]/cmdline`, `/proc/uptime`)
   * `src/syscall/dispatch.zig` (Modify: implement `nanosleep`, `clock_gettime`, `gettimeofday`, `kill`, `WNOHANG` in `wait4`)
   * `src/main.zig` (Modify: initialize timer and launch multi-process test)
-  * `scripts/verify_qemu.sh` (Modify: test background jobs, ps, kill, and uptime using the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
+  * `scripts/verify_qemu.sh` (Modify: test background jobs, ps, kill, and uptime using the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
 ---
 ## 3. Hardware Timer & Process Scanning Contract (AI Audited)
 ### 3.1 8259A PIC & 8254 PIT Register Interface
@@ -46,7 +46,7 @@ On x86 PCs, legacy BIOS configurations place Master PIC IRQs (`0..7`) on vectors
 | **8259A PIC (Master/Slave)** | Master: `0x20` (Cmd), `0x21` (Data)<br>Slave: `0xA0` (Cmd), `0xA1` (Data) | ICW1 (`0x11`), ICW2 (Master vector `0x20`, Slave vector `0x28`), ICW3 (`0x04` / `0x02`), ICW4 (`0x01`). Masks: unmask IRQ0 on Master (`0xFE`), mask all on Slave (`0xFF`). |
 | **8254 PIT (Timer Channel 0)** | Data: `0x40`, Cmd: `0x43` | Square wave mode 3 (`0x36`). Base clock `1,193,182 Hz / 100 Hz = 11931` (`0x2E9B`). Emits 100 interrupts per second (1 tick = 10 ms). |
 ### 3.2 `/proc/[pid]/stat` Format Contract
-Clean-room userland process viewers (such as `ps`) scan `/proc` to enumerate active processes:
+Userland process viewers (such as `ps`) scan `/proc` to enumerate active processes:
 1. Opens `/proc`, traverses entries via `getdents64`, identifying numerical directories (`"1"`, `"2"`, etc.).
 2. Reads `/proc/[pid]/stat` containing 24 space-separated tokens:
    ```text
@@ -146,7 +146,7 @@ pub fn getTicks() u64 {
    * In `sysWait4(pid, wstatus_ptr, options, rusage)`:
      * If `options & 1 != 0` (`WNOHANG`) and matching active child exists without zombies, return 0 immediately.
 4. **Step 4: Harness Script and rc.sh Updates**
-   * In `scripts/verify_qemu.sh`, provision `/etc/rc.sh` using the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`) to test timer, background processes, ps, and kill:
+   * In `scripts/verify_qemu.sh`, provision `/etc/rc.sh` using the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`) to test timer, background processes, ps, and kill:
      ```sh
      #!/bin/sh
      echo "[TINUX_SH] Testing hardware timer (PIT 100Hz) and nanosleep..."

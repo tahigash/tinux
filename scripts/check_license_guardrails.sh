@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # ==============================================================================
-# Tinux Clean-Room License & Binary Guardrail Wrapper
+# Tinux License & Binary Guardrail Wrapper
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

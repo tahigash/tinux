@@ -9,7 +9,7 @@
 
 The Tinux Virtual File System (VFS) provides a unified POSIX-compatible filesystem interface for all storage, devices, pseudo-filesystems, and inter-process communication pipes.
 
-All filesystem code is an independent clean-room implementation written in Zig without copying source code or header definitions from the Linux kernel.
+All filesystem code is an independent from-scratch implementation written in Zig without copying source code or header definitions from the Linux kernel.
 
 Default userland programs, utilities, and interactive shells (such as the in-tree Zig micro-userland) interact with the VFS exclusively via standard Linux System V AMD64 system calls (`open`, `read`, `write`, `close`, `lseek`, `stat`, `fstat`, `getdents64`, `openat`), without requiring external GPL-licensed BusyBox or coreutils binaries.
 
@@ -97,7 +97,7 @@ An in-memory hierarchical directory structure initialized at boot. Directories (
 During kernel boot, `cpio.unpackInitramfs` processes the initial ramdisk image:
 * Reads SVR4 newc header records (`070701` / `070702`).
 * Reconstructs directory hierarchies and creates regular file nodes with contents.
-* Installs clean-room userland executables into `/bin/`.
+* Installs in-tree userland executables into `/bin/`.
 
 ### 3. Device Filesystem (`/dev`)
 Character and block device nodes are exposed under `/dev`:

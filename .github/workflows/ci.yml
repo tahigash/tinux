@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   guardrails:
-    name: License, Clean-Room & Spec Guardrails
+    name: License, Binary & Spec Guardrails
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Clean-Room License & Binary Guardrails
+      - name: License & Binary Guardrails
         run: |
           python scripts/check_license_guardrails.py
 

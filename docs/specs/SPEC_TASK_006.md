@@ -35,8 +35,8 @@ You are the Implementation Builder. Implement the requirements adhering strictly
   * `src/fs/cpio.zig` (Create: SVR4 `newc` `070701` / `070702` CPIO archive unpacker)
   * `src/proc/elf.zig` (Modify: support `ET_EXEC` and `ET_DYN` Static-PIE with dynamic `argv` slices)
   * `src/syscall/dispatch.zig` (Modify: add VFS I/O, `writev`, `fstat`/`newfstatat`, `ioctl`, `uname`, `mmap`, ID stubs)
-  * `src/main.zig` (Modify: mount `initramfs.cpio` and boot the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
-  * `scripts/verify_qemu.sh` (Modify: synthesize clean-room userland and `/etc/motd` into `initramfs.cpio`)
+  * `src/main.zig` (Modify: mount `initramfs.cpio` and boot the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
+  * `scripts/verify_qemu.sh` (Modify: synthesize in-tree userland and `/etc/motd` into `initramfs.cpio`)
 ---
 ## 3. VFS, CPIO & Linux ABI Contract (AI Audited)
 ### 3.1 SVR4 `newc` CPIO Format Contract (`070701` / `070702`)
@@ -186,8 +186,8 @@ pub fn normalizePath(raw: []const u8) []const u8 {
    * Implement `sysWritev` iterating through `IoVec` arrays.
    * Implement `sysFstat` and `sysNewfstatat` filling `LinuxStat` records.
    * Implement `sysMmap` demand-mapping pages starting at `0x4000_0000`.
-4. **Step 4: Clean-Room Userland & Initramfs Generation in `verify_qemu.sh`**
-   * Compile the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`) into `.cache/initramfs_root/bin/sh` using `build_user_elf`.
+4. **Step 4: In-Tree Userland & Initramfs Generation in `verify_qemu.sh`**
+   * Compile the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`) into `.cache/initramfs_root/bin/sh` using `build_user_elf`.
    * Create symbolic link or binary copy for `/bin/cat`.
    * Write `/etc/motd` with content: `Welcome to Tinux (Linux ABI Compatible Kernel in Zig)!`.
    * Package `.cache/initramfs_root` into `.cache/initramfs.cpio` using CPIO or python script.

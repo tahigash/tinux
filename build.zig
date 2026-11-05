@@ -12,9 +12,9 @@ pub fn build(b: *std.Build) void {
     const task_str = b.option([]const u8, "task", "Milestone task to run (default: TASK-006)") orelse "TASK-006";
     ensureTaskConfig(task_str);
 
-    // Automatic clean-room fallbacks: ensure empty fallbacks exist in .cache/
+    // Automatic build fallbacks: ensure empty fallbacks exist in .cache/
     // for initramfs.cpio and init_test.elf if missing, allowing bare 'zig build'
-    // without pre-existing binary archives while preserving clean-room guardrails.
+    // without pre-existing binary archives while preserving binary guardrails.
     ensureInitramfsFallback();
     ensureInitTestFallback();
 

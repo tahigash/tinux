@@ -229,7 +229,7 @@ def generate_triage_report(log_path: str, kernel_elf: str) -> str:
         rip_int = int(rip)
         target_elf = kernel_elf
         lookup_addr = rip_int
-        # If RIP is in user space, check clean-room user ELF binaries if available
+        # If RIP is in user space, check in-tree user ELF binaries if available
         if 0x0040_0000 <= rip_int < 0x0080_0000:
             for cand in [".cache/initramfs_root/bin/tinux_sh", ".cache/initramfs_root/bin/hello_c", "src/proc/init_test.elf"]:
                 if os.path.isfile(cand):

@@ -4,9 +4,9 @@
 
 ---
 
-## Clean-Room & Licensing Checklist
+## Licensing & Provenance Checklist
 
-Please confirm that your changes strictly adhere to Tinux clean-room standards:
+Please confirm that your changes strictly adhere to Tinux licensing standards:
 
 - [ ] **No GPL / Third-Party Contamination:** This pull request contains NO source code, comments, or adaptations from the Linux kernel, GNU tools, BusyBox, or any GPL-licensed project. All code is written from scratch in Zig.
 - [ ] **No Compiled Binary Blobs:** No binary artifacts (`.elf`, `.bin`, `.so`, `.o`, `.cpio`, `.tar`, `.exe`) are committed or tracked in git.

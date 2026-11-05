@@ -33,7 +33,7 @@ You are the Implementation Builder. Implement the requirements adhering strictly
   * `src/proc/task.zig` (Modify: add `cwd` tracking per task)
   * `src/syscall/dispatch.zig` (Modify: implement `getdents64`, `mkdir`/`mkdirat`, `unlink`/`unlinkat`, `rmdir`, `lseek`, `utimensat`, `statx`)
   * `src/main.zig` (Modify: initialize VFS and run TASK-009 test)
-  * `scripts/verify_qemu.sh` (Modify: provide the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
+  * `scripts/verify_qemu.sh` (Modify: provide the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
 ---
 ## 3. Directory & File Manipulation Contract (AI Audited)
 ### 3.1 `sys_getdents64` Record Format Contract
@@ -151,7 +151,7 @@ pub const VfsNode = struct {
      * Construct 8-byte aligned `linux_dirent64` record in user buffer.
      * Advance offset and return total bytes written.
 4. **Step 4: Harness and Verification in `verify_qemu.sh`**
-   * Ensure userland utilities `mkdir`, `touch`, `ls`, `rm`, `cat` are provisioned from the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`).
+   * Ensure userland utilities `mkdir`, `touch`, `ls`, `rm`, `cat` are provisioned from the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`).
    * Execute `/etc/rc.sh` test sequence creating `/tmp/work`, writing files, listing directory contents, and deleting temporary files.
 ---
 ## 6. Verification Harness & Pass Criteria

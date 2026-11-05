@@ -52,7 +52,7 @@ fi
 
 
 # ------------------------------------------------------------------------------
-# Pre-Check: Clean-Room License & Binary Guardrail Audit
+# Pre-Check: License & Binary Guardrail Audit
 # ------------------------------------------------------------------------------
 if [[ -f "scripts/check_license_guardrails.py" ]] && [[ -n "$PYTHON_BIN" ]]; then
     "$PYTHON_BIN" scripts/check_license_guardrails.py || exit 1

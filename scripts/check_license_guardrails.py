@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tinux Clean-Room License & Binary Guardrail Auditor
+Tinux License & Binary Guardrail Auditor
 
 Ensures the repository contains zero compiled binary artifacts, zero GPL-contaminated
 userland binaries (e.g. prebuilt BusyBox or coreutils), and enforces license metadata
@@ -85,7 +85,7 @@ def check_license_integrity(repo_root):
     if os.path.isfile(readme_path):
         with open(readme_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
-        disclaimer_snippet = "Disclaimer: Tinux is an independent, clean-room implementation compatible with the Linux ABI"
+        disclaimer_snippet = "Disclaimer: Tinux is an independent, from-scratch implementation compatible with the Linux ABI"
         if disclaimer_snippet not in content:
             issues.append("README.md missing standard Linux trademark disclaimer")
     else:
@@ -114,7 +114,7 @@ def main():
     is_staged_only = "--staged" in sys.argv
 
     print("=" * 75)
-    print("  Tinux Clean-Room License & Binary Guardrail Auditor")
+    print("  Tinux License & Binary Guardrail Auditor")
     print("=" * 75)
 
     files_to_check = get_staged_files(repo_root) if is_staged_only else get_workspace_files(repo_root)
@@ -144,13 +144,13 @@ def main():
 
     print("-" * 75)
     if violation_count == 0:
-        print("  [PASS] All clean-room licensing and binary guardrails satisfied.")
+        print("  [PASS] All licensing and binary guardrails satisfied.")
         print("         Zero prohibited binaries detected; license metadata intact.")
         print("=" * 75)
         sys.exit(0)
     else:
         print(f"  [FAIL] Detected {violation_count} license or binary contamination issue(s).")
-        print("         Commit or build blocked to preserve clean-room licensing boundaries.")
+        print("         Commit or build blocked to preserve licensing boundaries.")
         print("=" * 75)
         sys.exit(1)
 

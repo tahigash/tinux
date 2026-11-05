@@ -107,14 +107,14 @@ record_result() {
     fi
 }
 # ------------------------------------------------------------------------------
-# Gate 0: Clean-Room License & Binary Guardrail Audit
+# Gate 0: License & Binary Guardrail Audit
 # ------------------------------------------------------------------------------
 if [[ -f "scripts/check_license_guardrails.py" ]]; then
-    echo -e "\n${BLUE}[Gate 0] Auditing clean-room boundaries and licensing integrity...${NC}"
+    echo -e "\n${BLUE}[Gate 0] Auditing repository boundaries and licensing integrity...${NC}"
     if [[ -n "$PYTHON_BIN" ]]; then
         "$PYTHON_BIN" scripts/check_license_guardrails.py || { echo -e "${RED}[FAIL]${NC} License guardrails violated."; exit 1; }
     fi
-    echo -e "${GREEN}[PASS]${NC} Clean-room boundaries and hybrid licensing verified."
+    echo -e "${GREEN}[PASS]${NC} Repository boundaries and hybrid licensing verified."
 fi
 
 # ------------------------------------------------------------------------------

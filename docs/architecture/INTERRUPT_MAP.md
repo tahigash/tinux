@@ -12,7 +12,7 @@ Tinux configures a 256-entry Interrupt Descriptor Table (IDT) loaded into the pr
 2. **Hardware IRQs (Vectors 32 to 255):** External peripheral interrupts routed through the dual 8259A PIC, I/O APIC, and Local APIC.
 3. **Software Interrupts (Vector 0x80):** Legacy Linux system call interface, operating alongside the primary fast `SYSCALL`/`SYSRET` mechanism.
 
-All handlers and dispatchers are independent clean-room implementations written in x86_64 assembly and Zig, without using any proprietary or GPL-licensed Linux kernel code.
+All handlers and dispatchers are independent from-scratch implementations written in x86_64 assembly and Zig, without using any proprietary or GPL-licensed Linux kernel code.
 
 ---
 
@@ -159,7 +159,7 @@ Tinux provides two distinct mechanisms for entering kernel mode from user space:
    * Configured via Model-Specific Registers (`MSR_STAR`, `MSR_LSTAR`, `MSR_FMASK`).
    * When userland executes `syscall`, the processor saves user `RIP` to `RCX`, user `RFLAGS` to `R11`, masks flags via `FMASK`, loads kernel `RIP` from `LSTAR`, and switches `CS`/`SS` descriptors.
    * Does not touch the IDT, avoiding memory accesses and descriptor table lookups.
-   * Primary interface used by clean-room userland binaries and standard Linux libraries.
+   * Primary interface used by in-tree userland binaries and standard Linux libraries.
 
 2. **Legacy Syscall Gate (`int 0x80`, Vector 128):**
    * Configured in the IDT with Privilege Level 3 (`DPL=3`), allowing user processes to execute software interrupts.
