@@ -5,13 +5,13 @@
 
 ---
 
-## 1. Clean-Room Architectural Principles
+## 1. Architectural Principles
 
 Tinux provides binary compatibility with the standard Linux x86_64 system call ABI. The kernel implements these functional interfaces independently in Zig and assembly without copying code from the Linux kernel source tree.
 
 Because system call numbers, register conventions, and structure layouts represent non-copyrightable functional specifications, Tinux is distributed under a permissive dual license (MIT OR Apache-2.0).
 
-All default userland tools, shells, and test harnesses are clean-room implementations (including the in-tree Zig micro-userland), without requiring or bundling external GPL-licensed BusyBox or GNU coreutils binaries. Unmodified static and dynamic Linux binaries compiled with standard toolchains (Zig, GCC/musl, Clang, Rust) execute directly on Tinux.
+All default userland tools, shells, and test harnesses are from-scratch implementations (including the in-tree Zig micro-userland), without requiring or bundling external GPL-licensed BusyBox or GNU coreutils binaries. Unmodified static and dynamic Linux binaries compiled with standard toolchains (Zig, GCC/musl, Clang, Rust) execute directly on Tinux.
 
 ---
 

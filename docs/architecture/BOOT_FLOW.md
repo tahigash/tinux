@@ -11,7 +11,7 @@ Tinux boots as a freestanding 64-bit operating system kernel on the x86_64 archi
 
 When QEMU or a compatible virtual machine monitor boots the kernel, execution begins at physical address `0x0010_0000` (1 MiB mark). The boot protocol passes control to the kernel with interrupts disabled (`cli`) and direction flag cleared (`cld`).
 
-All initial userland binaries, shell environments, and test suites are clean-room implementations (such as the in-tree Zig micro-userland), without requiring external GPL-licensed BusyBox or GNU coreutils.
+All initial userland binaries, shell environments, and test suites are from-scratch implementations (such as the in-tree Zig micro-userland), without requiring external GPL-licensed BusyBox or GNU coreutils.
 
 ---
 
@@ -176,13 +176,13 @@ The kernel unpacks the embedded or loaded CPIO archive (`initramfs.cpio`). It tr
    }
    ```
 2. It creates an isolated user PML4 page table using `vmm.createFreshUserPml4()`.
-3. The ELF loader (`elf.loadStaticElf`) parses the clean-room static binary, maps `LOAD` segments with user permissions (`PTE_USER`), and constructs the initial System V ABI stack (`argc`, `argv`, `envp`, `auxv`).
+3. The ELF loader (`elf.loadStaticElf`) parses the in-tree static binary, maps `LOAD` segments with user permissions (`PTE_USER`), and constructs the initial System V ABI stack (`argc`, `argv`, `envp`, `auxv`).
 4. The kernel switches `CR3` to the user page directory and enters user space (Ring 3) via `enterUserMode` using `IRETQ` or `SYSRET`.
 
 ---
 
-## 6. Clean-Room Policy Compliance
+## 6. Licensing & Independence Compliance
 
-Tinux enforces clean-room independence across the entire boot sequence:
+Tinux enforces source independence across the entire boot sequence:
 * The bootloader and kernel entry stubs are written from scratch in x86_64 assembly and Zig.
-* Userland utilities and default shell environments use clean-room implementations (including the in-tree Zig micro-userland), without bundling GPL-licensed BusyBox or external proprietary binaries.
+* Userland utilities and default shell environments use from-scratch implementations (including the in-tree Zig micro-userland), without bundling GPL-licensed BusyBox or external proprietary binaries.

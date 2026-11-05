@@ -34,7 +34,7 @@ You are the Implementation Builder. Implement the requirements adhering strictly
   * `src/fs/vfs.zig` (Modify: support per-task `fd_table` cloning and `fcntl` / `dup2` FD duplication)
   * `src/proc/task.zig` (Create: `Task` struct, process table `MAX_TASKS = 16`, `activateTask`, `forkCurrentTask`)
   * `src/syscall/dispatch.zig` (Modify: implement `fork`/`vfork`/`clone`, `execve`, `wait4`, `fcntl`, `dup2`, `getcwd`)
-  * `src/main.zig` (Modify: initialize PID 1 via `task.zig` and launch the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
+  * `src/main.zig` (Modify: initialize PID 1 via `task.zig` and launch the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`))
   * `scripts/verify_qemu.sh` (Modify: add `/etc/rc.sh` and `/bin/sh` to `initramfs.cpio`)
 ---
 ## 3. Process Architecture & Linux ABI Contract (AI Audited)
@@ -62,7 +62,7 @@ Each task maintains an independent `pml4_phys`. During `fork` / `clone`, `vmm.cl
      * Non-present or kernel entries are copied directly.
      * Present user pages allocate a fresh zeroed physical frame via `pmm.allocZeroedPage()`, copy 4096 bytes from source page, and install the new entry with identical PTE flags.
 ### 3.3 Multi-Process & Shell Syscalls Contract
-The in-tree clean-room shell (`/bin/sh /etc/rc.sh`) requires standard process lifecycle syscalls:
+The in-tree shell (`/bin/sh /etc/rc.sh`) requires standard process lifecycle syscalls:
 | Syscall | Num | Arguments | Exact Behavior & Return Contract |
 | :--- | :--- | :--- | :--- |
 | **`sys_clone`** | `56` | `flags, child_stack, ptid, ctid, newtls` | Delegates to `forkCurrentTask(frame, child_stack)`. In parent, returns child PID; in child, returns 0. |
@@ -262,8 +262,8 @@ pub fn currentTask() *Task {
    * Allocate fresh user PML4 (`vmm.createFreshUserPml4`).
    * Load static ELF image and construct initial user stack.
    * Reset frame registers, update task `pml4_phys`, `brk`, and call `task.activateTask`.
-4. **Step 4: Clean-Room Shell & Script Provisioning in `verify_qemu.sh`**
-   * Provide the in-tree clean-room Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`).
+4. **Step 4: In-Tree Shell & Script Provisioning in `verify_qemu.sh`**
+   * Provide the in-tree Zig userland (`/bin/sh` synthesized from `tinux_busybox.zig`).
    * Provide `/etc/rc.sh`:
      ```sh
      #!/bin/sh

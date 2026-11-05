@@ -1,12 +1,12 @@
-# Tinux Clean-Room Licensing & Binary Guardrails Policy
+# Tinux Licensing & Binary Guardrails Policy
 
-> **Objective:** Maintain a strict clean-room repository boundary, prevent GPL copyleft contamination from third-party binaries (e.g., precompiled BusyBox or musl runtime binaries), and preserve the hybrid **MIT / Apache-2.0** dual license model.
+> **Objective:** Maintain a strict source-only repository boundary, prevent GPL copyleft contamination from third-party binaries (e.g., precompiled BusyBox or musl runtime binaries), and preserve the hybrid **MIT / Apache-2.0** dual license model.
 
 ---
 
-## 1. Clean-Room Architecture & Permissive Licensing
+## 1. From-Scratch Architecture & Permissive Licensing
 
-Tinux is an independent, clean-room implementation of the Linux x86_64 ABI written in Zig and assembly. It borrows no source code from the Linux kernel tree.
+Tinux is an independent, from-scratch implementation of the Linux x86_64 ABI written in Zig and assembly. It borrows no source code from the Linux kernel tree.
 
 Because system call numbers, struct layouts, and MSR configurations are non-copyrightable functional interface specifications (ABI), the Linux kernel's GPL v2 license does not apply to Tinux kernel source code. Tinux is therefore freely distributed under a permissive dual license (**MIT OR Apache-2.0**).
 
@@ -14,7 +14,7 @@ Because system call numbers, struct layouts, and MSR configurations are non-copy
 
 ## 2. Copyleft Risk Vectors & Prevention Rules
 
-To preserve this clean-room status and prevent inadvertent copyleft obligations from triggering, the repository enforces three core prohibitions:
+To preserve this permissive licensing status and prevent inadvertent copyleft obligations from triggering, the repository enforces three core prohibitions:
 
 ### Rule 1: No Pre-Compiled Binary Artifacts in Git
 
@@ -35,7 +35,7 @@ To preserve this clean-room status and prevent inadvertent copyleft obligations 
 ### Rule 3: Linux Trademark Disclaimer
 
 * All distributions and primary documentation (`README.md`) must display the non-affiliation disclaimer:
-  > *"Tinux is an independent, clean-room implementation compatible with the Linux ABI. It is not an official project of Linus Torvalds or the Linux Foundation, and contains no source code from the Linux kernel."*
+  > *"Tinux is an independent, from-scratch implementation compatible with the Linux ABI. It is not an official project of Linus Torvalds or the Linux Foundation, and contains no source code from the Linux kernel."*
 
 ---
 

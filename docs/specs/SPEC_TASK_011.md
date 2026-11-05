@@ -192,7 +192,7 @@ pub fn sysReadlinkat(dirfd: isize, path_ptr: usize, buf_ptr: usize, bufsiz: usiz
 4. **Step 4: Update test harness in `scripts/verify_qemu.sh`:**
    * Package dynamic loader test artifacts into initramfs:
      1. Shared library `/lib/libtinux.so`.
-     2. Dynamic interpreter `/lib/ld-musl-x86_64.so.1` (or clean-room micro-loader).
+     2. Dynamic interpreter `/lib/ld-musl-x86_64.so.1` (or in-tree micro-loader).
      3. Dynamically linked test executable `/bin/dyn_inspect` built with `PT_INTERP = "/lib/ld-musl-x86_64.so.1"`.
      4. Update `/etc/rc.sh`:
         ```sh

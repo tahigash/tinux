@@ -1,5 +1,5 @@
 # Tinux
-**A clean-room, Linux ABI-compatible x86_64 kernel written in Zig, built via multi-model agentic engineering**
+**A from-scratch, Linux ABI-compatible x86_64 kernel written in Zig, built via multi-model agentic engineering**
 
 [![Architecture: x86_64](https://img.shields.io/badge/arch-x86__64-blue.svg)](#architecture-overview)
 [![Language: Zig](https://img.shields.io/badge/language-Zig-f7a41d.svg)](https://ziglang.org/)
@@ -14,13 +14,13 @@
 **Tinux** is a portmanteau of **Linux**, **Transformer**, and its creator's first name (**Takashi**).
 However, in strict observance of the precedent established by Gregory Kurtzer's [**Ginux**](https://github.com/gmkurtzer/ginux), we state this clearly:
 
-> *"Disclaimer: Tinux is an independent, clean-room implementation compatible with the Linux ABI. It is not an official project of Linus Torvalds or the Linux Foundation, and contains no source code from the Linux kernel."*
+> *"Disclaimer: Tinux is an independent, from-scratch implementation compatible with the Linux ABI. It is not an official project of Linus Torvalds or the Linux Foundation, and contains no source code from the Linux kernel."*
 
 ---
 
 ## Overview
 
-Tinux is an x86_64 operating system kernel written from scratch in Zig that implements a clean-room Linux System V ABI. It executes unmodified Linux userland binaries across multi-process, multi-threaded, and networked workloads.
+Tinux is an x86_64 operating system kernel written from scratch in Zig that implements the Linux System V ABI. It executes unmodified Linux userland binaries across multi-process, multi-threaded, and networked workloads.
 
 ### Capabilities
 
@@ -94,7 +94,7 @@ Tinux was developed using an **Architect-Builder Human-Directed Agentic Engineer
 | **`TASK-003`** | `mm` | 4-level page table manager (VMM) & `std.mem.Allocator` kernel heap | Dynamic map/unmap & kmalloc |
 | **`TASK-004`** | `syscall` | `SYSCALL`/`SYSRET` MSR setup, Ring 3 transition, `sys_write` & `sys_exit` | Ring 3 `-device isa-debug-exit` |
 | **`TASK-005`** | `proc/elf` | Static ELF64 loader, System V AMD64 stack (`auxv`), TLS (`%fs`), `sys_brk` | Standalone userland ELF |
-| **`TASK-006`** | `fs/cpio` | In-memory VFS, SVR4 `newc` CPIO initramfs unpacker, file I/O syscalls | Clean-room userland execution |
+| **`TASK-006`** | `fs/cpio` | In-memory VFS, SVR4 `newc` CPIO initramfs unpacker, file I/O syscalls | In-tree userland execution |
 | **`TASK-007`** | `proc/task` | Multi-process table, `cloneUserPml4`, `fork`/`execve`/`wait4` | `/bin/sh /etc/rc.sh` script |
 | **`TASK-008`** | `fs/pipe` | Ring-buffer IPC pipes (`pipe2`), `dup2`/`fcntl`, `/proc` pseudo-FS | `cat /etc/motd \| grep` |
 | **`TASK-009`** | `fs/tmpfs` | Writable `tmpfs`, `getdents64` directory listing, `mkdir`/`unlink` | `mkdir`, `>`, `ls`, `rm` |
@@ -189,7 +189,7 @@ ps
 
 ## Summary
 
-Tinux is a clean-room, Linux ABI-compatible x86_64 kernel written from scratch in Zig.
+Tinux is an independent, Linux ABI-compatible x86_64 kernel written from scratch in Zig.
 
 ### Background
 

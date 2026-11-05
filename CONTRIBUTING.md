@@ -2,11 +2,11 @@
 
 Thank you for your interest in contributing to **Tinux**!
 
-Tinux is an independent, clean-room, Linux ABI-compatible x86_64 operating system kernel written in Zig. Because of our clean-room design and hybrid permissive licensing, all contributors must strictly adhere to the following principles.
+Tinux is an independent, from-scratch, Linux ABI-compatible x86_64 operating system kernel written in Zig. Because of our from-scratch design and hybrid permissive licensing, all contributors must strictly adhere to the following principles.
 
 ---
 
-## 1. Absolute Clean-Room Principles
+## 1. Original Implementation & Licensing Principles
 
 Tinux is distributed under a permissive dual license (**MIT OR Apache-2.0**). To protect the project, users, and contributors from intellectual property and copyright contamination:
 
@@ -25,7 +25,7 @@ Tinux is distributed under a permissive dual license (**MIT OR Apache-2.0**). To
 
 ## 2. Developer Certificate of Origin (DCO)
 
-To certify that your contribution is your original work and conforms to the clean-room principles, we require all commits to include a **Signed-off-by** line.
+To certify that your contribution is your original work and conforms to these licensing principles, we require all commits to include a **Signed-off-by** line.
 
 Use the `-s` or `--signoff` flag when committing:
 
@@ -63,7 +63,7 @@ By signing off, you certify under the [Developer Certificate of Origin 1.1](http
 Before submitting a Pull Request, run the local quality and license checks:
 
 ```bash
-# 1. Clean-room and binary guardrail verification
+# 1. License and binary guardrail verification
 python scripts/check_license_guardrails.py
 
 # 2. Specification and ASCII integrity check

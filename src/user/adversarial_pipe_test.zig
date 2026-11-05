@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Tinux Project Developers
 // Dual-licensed under MIT or Apache-2.0
-// Clean-room Adversarial IPC Pipe Semantics and Concurrency Verifier
+// From-scratch Adversarial IPC Pipe Semantics and Concurrency Verifier
 
 const std = @import("std");
 

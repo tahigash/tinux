@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Tinux Project Developers
 // Dual-licensed under MIT or Apache-2.0
-// Clean-room micro-userland and BusyBox replacement for Tinux x86_64
+// In-tree micro-userland and BusyBox replacement for Tinux x86_64
 
 const std = @import("std");
 

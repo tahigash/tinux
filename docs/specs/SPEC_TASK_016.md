@@ -168,7 +168,7 @@ In `vfs.writeNode` and `vfs.unlink`, track modification under `"mnt/"` so `tarfs
      tar --format=ustar -cf "$DISK_IMG" -C "$DISK_STAGE" host_seed.txt
      truncate -s 1M "$DISK_IMG"
      ```
-   * Execute clean-room shell operations inside the VM:
+   * Execute shell operations inside the VM:
      ```sh
      echo "[TINUX_SH] Mounting /dev/vda onto /mnt..."
      /bin/mount -t tarfs /dev/vda /mnt

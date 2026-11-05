@@ -3,7 +3,7 @@
 > **Target Environment:** Autonomous AI Engineering Environment / CLI  
 > * **Primary Builder Agent:** Autonomous AI Builder (Fast Autonomous Execution Loop)  
 > * **Escalation Architect / Auditor Agents:** AI System Architect / AI Code Auditor  
-> * **Project Goal:** Build **Tinux**, a clean-room Linux ABI-compatible x86_64 kernel written in Zig, executing `TASK-001` through `TASK-020` sequentially.
+> * **Project Goal:** Build **Tinux**, a from-scratch Linux ABI-compatible x86_64 kernel written in Zig, executing `TASK-001` through `TASK-020` sequentially.
 
 ---
 
